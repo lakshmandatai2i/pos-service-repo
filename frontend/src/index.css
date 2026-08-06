@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #1a1209;
+    color: #f1dfd0;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Hanken Grotesk', sans-serif;
+  }
+}
+
+.font-headline {
+  font-family: 'Hanken Grotesk', sans-serif;
+}
+
+.font-body {
+  font-family: 'Inter', sans-serif;
+}
+
+.font-receipt {
+  font-family: 'Courier Prime', monospace;
+}
+
+.glass-panel {
+  background: rgba(42, 35, 27, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stat-card-gradient {
+  background: radial-gradient(circle at top right, rgba(242, 195, 91, 0.1) 0%, transparent 60%), #271e14;
+}
+
+.text-glow {
+  text-shadow: 0 0 10px rgba(242, 195, 91, 0.5);
+}
+
+.receipt-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.receipt-scroll::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.1); 
+}
+.receipt-scroll::-webkit-scrollbar-thumb {
+  background: rgba(238, 192, 88, 0.2); 
+  border-radius: 4px;
+}
+.receipt-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(238, 192, 88, 0.4); 
+}
+
+@keyframes pulseAmber {
+  0%, 100% { opacity: 1; border-color: rgba(242, 195, 91, 0.6); }
+  50% { opacity: 0.5; border-color: rgba(242, 195, 91, 0.2); }
+}
+
+.animate-pulse-amber {
+  animation: pulseAmber 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.96) translateY(12px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
