@@ -41,8 +41,8 @@ export default function Dashboard() {
 
   // Active metrics
   const occupiedCount = tables.filter(t => t.status === 'occupied' || t.status === 'preparing' || t.status === 'ready' || t.status === 'prepared').length;
-  const kitchenCount  = tables.filter(t => t.status === 'preparing').length;
   const readyCount    = tables.filter(t => t.status === 'ready').length;
+
 
 
   const handleStatusChange = useCallback((tableId: number, nextStatus: TableStatus) => {
@@ -157,8 +157,8 @@ export default function Dashboard() {
         {activeTab === 'tables' && (
           <>
             {/* Stats Row */}
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-              {/* Stat 1: Occupied */}
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+              {/* Stat 1: Occupied Tables */}
               <div className={`glass-panel stat-card-gradient rounded-2xl p-6 relative overflow-hidden group border transition-all ${
                 isDark ? 'border-white/5' : 'border-stone-200 bg-white'
               }`}>
@@ -180,29 +180,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Stat 2: In Kitchen */}
-              <div className={`glass-panel stat-card-gradient rounded-2xl p-6 relative overflow-hidden group border transition-all ${
-                isDark ? 'border-white/5' : 'border-stone-200 bg-white'
-              }`}>
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <p className={`text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-[#d2c5b1]' : 'text-stone-500'}`}>
-                      In Kitchen
-                    </p>
-                    <h3 className={`font-headline text-4xl font-bold m-0 ${isDark ? 'text-[#f1dfd0]' : 'text-stone-900'}`}>
-                      {kitchenCount}
-                    </h3>
-                  </div>
-                  <div className="w-12 h-12 rounded-full bg-[#c3aa95]/10 flex items-center justify-center text-[#e0c5af] group-hover:scale-110 transition-transform">
-                    <span className="material-symbols-outlined text-[28px]">soup_kitchen</span>
-                  </div>
-                </div>
-                <p className="text-xs text-[#f2c35b] font-semibold flex items-center gap-1 mt-4">
-                  <span className="material-symbols-outlined text-[14px]">arrow_upward</span> Active orders firing
-                </p>
-              </div>
-
-              {/* Stat 3: Ready to Serve */}
+              {/* Stat 2: Ready to Serve */}
               <div className={`glass-panel stat-card-gradient rounded-2xl p-6 relative overflow-hidden group border transition-all ${
                 isDark ? 'border-white/5' : 'border-stone-200 bg-white'
               }`}>
@@ -220,10 +198,11 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <p className={`text-xs flex items-center gap-1 mt-4 ${readyCount > 0 ? 'text-[#f2c35b] font-bold animate-pulse' : isDark ? 'text-[#d2c5b1]' : 'text-stone-500'}`}>
-                  {readyCount > 0 ? 'Action required — Serve now' : 'All clear'}
+                  {readyCount > 0 ? 'Action required — Chef marked order ready' : 'All clear'}
                 </p>
               </div>
             </section>
+
 
             {/* Filters & Search Bar */}
             <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -271,9 +250,9 @@ export default function Dashboard() {
             <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-24 md:pb-0">
               {filteredTables.map(t => {
                 const subtotal = calcSubtotal(t.orders);
-                const isActive = t.status !== 'available' && t.status !== 'closed';
 
                 return (
+
                   <div
                     key={t.id}
                     onClick={() => setSelectedTable(t)}
@@ -320,14 +299,22 @@ export default function Dashboard() {
 
 
                     {/* Bottom Row */}
-                    {isActive ? (
+                    {t.status === 'ready' ? (
                       <div className="relative z-10 flex justify-between items-end">
                         <div>
                           <p className="text-xs text-[#d2c5b1] mb-0.5">Current Bill</p>
-                          <p className="font-headline text-xl font-bold text-[#f1dfd0]">₹{subtotal.toLocaleString()}</p>
+                          <p className="font-headline text-xl font-bold text-[#f2c35b]">₹{subtotal.toLocaleString()}</p>
                         </div>
                       </div>
-                    ) : t.status === 'available' ? (
+                    ) : (t.status === 'occupied' || t.status === 'preparing') ? (
+                      <div className="relative z-10 flex justify-between items-end">
+                        <div>
+                          <p className="text-xs text-[#d2c5b1] mb-0.5">Active Order</p>
+                          <p className="text-sm font-bold text-[#f1dfd0]">{t.orders.length} Item{t.orders.length !== 1 ? 's' : ''}</p>
+                        </div>
+                      </div>
+                    ) :
+ t.status === 'available' ? (
                       <div className="flex justify-center mt-auto">
                         <button
                           onClick={(e) => { e.stopPropagation(); setSelectedTable(t); }}
