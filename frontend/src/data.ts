@@ -34,6 +34,7 @@ export interface POSNotif {
   message: string;
   detail?: string;
   tableNumber?: number;
+  ticketNo?: string;
   isRead: boolean;
   createdAt: string;
 }

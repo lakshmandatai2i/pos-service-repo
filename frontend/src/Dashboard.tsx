@@ -1,9 +1,14 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 import {
   MOCK_TABLES, MOCK_NOTIFS,
   type RestaurantTable, type POSNotif, type TableStatus, type ActiveView, type TableOrder
 } from './data';
+import {
+  sendOrderToKitchen,
+  subscribeKDSUpdates,
+  type KDSOrder
+} from './kdsStore';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,8 +33,50 @@ export default function Dashboard() {
   const [selectedTable, setSelectedTable] = useState<RestaurantTable | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<TableStatus | 'all'>('all');
+  const [liveToast, setLiveToast] = useState<{ id: number; title: string; message: string } | null>(null);
+
   const chefNotifs = notifs.filter(n => n.type === 'kitchen_ready');
   const unreadNotifs = chefNotifs.filter(n => !n.isRead).length;
+
+  // Real-time listener for chef order status updates (e.g. Order Prepared)
+  useEffect(() => {
+    const unsubscribe = subscribeKDSUpdates((data) => {
+      if (data.type === 'ORDER_PREPARED' && data.order) {
+        const preparedOrder = data.order;
+        // Update table status to ready
+        setTables(prev => prev.map(t => t.number === preparedOrder.tableNumber ? { ...t, status: 'ready' } : t));
+        if (selectedTable && selectedTable.number === preparedOrder.tableNumber) {
+          setSelectedTable(prev => prev ? { ...prev, status: 'ready' } : null);
+        }
+
+        // Push real-time notification
+        const newNotif: POSNotif = {
+          id: Date.now(),
+          type: 'kitchen_ready',
+          message: `Order ${preparedOrder.ticketNo} for Table ${preparedOrder.tableNumber} is prepared!`,
+          detail: `Ready to serve (${preparedOrder.items.length} items)`,
+          tableNumber: preparedOrder.tableNumber,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        };
+        setNotifs(prev => [newNotif, ...prev]);
+
+        // Trigger real-time toast alert
+        setLiveToast({
+          id: Date.now(),
+          title: `🔔 Order ${preparedOrder.ticketNo} Prepared!`,
+          message: `Table ${preparedOrder.tableNumber} order is ready to serve.`
+        });
+        setTimeout(() => setLiveToast(null), 5000);
+      } else if (data.type === 'STATUS_CHANGE' && data.order) {
+        const changedOrder = data.order;
+        const targetStatus: TableStatus = changedOrder.status === 'completed' ? 'ready' : changedOrder.status === 'preparing' ? 'preparing' : 'occupied';
+        setTables(prev => prev.map(t => t.number === changedOrder.tableNumber ? { ...t, status: targetStatus } : t));
+      }
+    });
+
+    return () => unsubscribe();
+  }, [selectedTable]);
 
   // Filtered tables
   const filteredTables = tables.filter(t => {
@@ -52,8 +99,62 @@ export default function Dashboard() {
     }
   }, [selectedTable]);
 
+  const handleSendToKitchen = useCallback((table: RestaurantTable) => {
+    if (!table.orders || table.orders.length === 0) return;
+    const ticketNo = table.ticketNo || `#${8900 + table.number}`;
+    const newKDSOrder: KDSOrder = {
+      id: Date.now(),
+      ticketNo,
+      tableNumber: table.number,
+      section: table.section,
+      guestCount: table.capacity,
+      waiterName: 'John',
+      status: 'pending',
+      items: table.orders.map(o => ({
+        id: o.id,
+        itemName: o.itemName,
+        qty: o.qty,
+        price: o.price,
+        note: o.note
+      })),
+      notes: table.orders.map(o => o.note).filter(Boolean).join(', '),
+      createdAt: new Date().toISOString()
+    };
+
+    sendOrderToKitchen(newKDSOrder);
+
+    // Update table status to preparing
+    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'preparing', ticketNo } : t));
+    if (selectedTable && selectedTable.id === table.id) {
+      setSelectedTable(prev => prev ? { ...prev, status: 'preparing', ticketNo } : null);
+    }
+
+    setLiveToast({
+      id: Date.now(),
+      title: `Order ${ticketNo} Sent to Kitchen`,
+      message: `Table ${table.number} order has been sent to chef.`
+    });
+    setTimeout(() => setLiveToast(null), 4000);
+  }, [selectedTable]);
+
   return (
     <div className={`min-h-screen flex font-body selection:bg-[#f2c35b]/30 selection:text-[#f2c35b] ${isDark ? 'dark bg-[#1a1209] text-[#f1dfd0]' : 'bg-[#f7f4ed] text-[#2a1b0e]'}`}>
+
+      {/* ── LIVE TOAST NOTIFICATION ── */}
+      {liveToast && (
+        <div className="fixed top-6 right-6 z-50 animate-bounce">
+          <div className="bg-[#d4a843] text-[#261a00] px-5 py-4 rounded-2xl shadow-[0_10px_30px_rgba(212,168,67,0.4)] flex items-center gap-4 border border-white/20 font-bold">
+            <span className="material-symbols-outlined text-[24px]">notifications_active</span>
+            <div>
+              <p className="text-sm m-0">{liveToast.title}</p>
+              <p className="text-xs opacity-80 font-normal m-0">{liveToast.message}</p>
+            </div>
+            <button onClick={() => setLiveToast(null)} className="ml-2 hover:opacity-75">
+              <span className="material-symbols-outlined text-sm">close</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════════════════
           SIDEBAR NAVIGATION
@@ -504,10 +605,21 @@ export default function Dashboard() {
                         {selectedTable.status === 'ready' ? (
                           <button className="w-full py-4 px-4 rounded-xl font-bold text-sm bg-[#f2c35b] text-[#402d00] hover:bg-[#ffe2ab] transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(242,195,91,0.3)]">
                             <span className="material-symbols-outlined text-[22px]">print</span>
-                            <span>Print Receipt</span>
+                            <span>Print Receipt (Order Ready)</span>
+                          </button>
+                        ) : selectedTable.status === 'preparing' ? (
+                          <button
+                            disabled
+                            className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#f2c35b]/10 border border-[#f2c35b]/40 flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
+                          >
+                            <span className="material-symbols-outlined text-[18px] animate-spin">soup_kitchen</span>
+                            <span>Order Sent to Kitchen (Preparing)</span>
                           </button>
                         ) : (
-                          <button className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#f1dfd0] border border-white/20 hover:bg-white/5 transition-colors flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleSendToKitchen(selectedTable)}
+                            className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#261a00] bg-[#f2c35b] hover:bg-[#ffe2ab] transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+                          >
                             <span className="material-symbols-outlined text-[18px]">send</span>
                             <span>Send to Kitchen</span>
                           </button>
