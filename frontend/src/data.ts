@@ -1,8 +1,11 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type TableStatus = 'available' | 'occupied' | 'preparing' | 'prepared' | 'ready' | 'bussing' | 'closed';
+export type TableStatus = 'available' | 'occupied' | 'preparing' | 'prepared' | 'ready' | 'closed';
+
 export type NotificationType = 'order_created' | 'kitchen_preparing' | 'kitchen_ready' | 'payment_completed' | 'item_added' | 'low_stock' | 'order_sent';
-export type ActiveView = 'tables' | 'notifications' | 'kitchen' | 'settings';
+export type ActiveView = 'tables' | 'notifications';
+
+
 
 export interface TableOrder {
   id: number;
@@ -68,7 +71,8 @@ export const MOCK_TABLES: RestaurantTable[] = [
     ],
   },
   { id: 5, number: 5, capacity: 2, section: 'Patio', status: 'available', orders: [] },
-  { id: 8, number: 8, capacity: 4, section: 'Private Room', status: 'bussing', orders: [] },
+  { id: 8, number: 8, capacity: 4, section: 'Private Room', status: 'available', orders: [] },
+
   {
     id: 1, number: 1, capacity: 2, section: 'Main Dining', status: 'occupied',
     ticketNo: '#8945', startedAt: new Date(Date.now() - 20 * 60000).toISOString(),
@@ -88,11 +92,9 @@ export const MOCK_TABLES: RestaurantTable[] = [
   },
 ];
 
-// ─── Mock Notifications ───────────────────────────────────────────────────────
-
 export const MOCK_NOTIFS: POSNotif[] = [
   { id: 1, type: 'kitchen_ready', message: 'Table 2 order is ready to serve!', detail: 'Chicken Biryani, Raita, Gulab Jamun are prepared.', tableNumber: 2, isRead: false, createdAt: new Date(Date.now() - 3 * 60000).toISOString() },
-  { id: 2, type: 'kitchen_preparing', message: 'Kitchen started preparing Table 7.', detail: 'Course 2/3: Dal Makhani, Garlic Naan.', tableNumber: 7, isRead: false, createdAt: new Date(Date.now() - 8 * 60000).toISOString() },
-  { id: 3, type: 'order_sent', message: 'Order sent to kitchen for Table 4.', detail: 'Mango Lassi added to Ticket #8942.', tableNumber: 4, isRead: false, createdAt: new Date(Date.now() - 12 * 60000).toISOString() },
-  { id: 4, type: 'payment_completed', message: 'Payment received — Table 10.', detail: '₹1,850 collected via Card.', tableNumber: 10, isRead: true, createdAt: new Date(Date.now() - 20 * 60000).toISOString() },
+  { id: 2, type: 'kitchen_ready', message: 'Table 5 order is ready to serve!', detail: 'Paneer Tikka, Dal Makhani, Garlic Naan are prepared.', tableNumber: 5, isRead: false, createdAt: new Date(Date.now() - 6 * 60000).toISOString() },
+  { id: 3, type: 'kitchen_ready', message: 'Table 9 order is ready to serve!', detail: 'Mutton Rogan Josh, Steamed Basmati Rice are prepared.', tableNumber: 9, isRead: true, createdAt: new Date(Date.now() - 15 * 60000).toISOString() },
 ];
+
