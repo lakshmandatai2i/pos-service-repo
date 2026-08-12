@@ -3,7 +3,7 @@
 export type TableStatus = 'available' | 'occupied' | 'preparing' | 'prepared' | 'ready' | 'closed';
 
 export type NotificationType = 'order_created' | 'kitchen_preparing' | 'kitchen_ready' | 'payment_completed' | 'item_added' | 'low_stock' | 'order_sent';
-export type ActiveView = 'tables' | 'notifications';
+export type ActiveView = 'tables' | 'notifications' | 'settings';
 
 
 
