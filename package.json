@@ -6,10 +6,13 @@
     "dev": "npm --prefix services/pos-service/waiter-dashboard run dev",
     "dev:waiter": "npm --prefix services/pos-service/waiter-dashboard run dev",
     "dev:chef": "npm --prefix services/pos-service/chef-dashboard run dev",
+    "dev:manager": "npm --prefix services/Restaurant-service/StoreManagerDashboard run dev",
     "build": "npm --prefix services/pos-service/waiter-dashboard run build",
     "build:waiter": "npm --prefix services/pos-service/waiter-dashboard run build",
     "build:chef": "npm --prefix services/pos-service/chef-dashboard run build",
+    "build:manager": "npm --prefix services/Restaurant-service/StoreManagerDashboard run build",
     "preview:waiter": "npm --prefix services/pos-service/waiter-dashboard run preview",
-    "preview:chef": "npm --prefix services/pos-service/chef-dashboard run preview"
+    "preview:chef": "npm --prefix services/pos-service/chef-dashboard run preview",
+    "preview:manager": "npm --prefix services/Restaurant-service/StoreManagerDashboard run preview"
   }
 }
