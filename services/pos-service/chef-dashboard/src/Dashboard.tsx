@@ -126,7 +126,9 @@ export default function Dashboard() {
       ? pendingOrders
       : activeTab === 'preparing'
         ? preparingOrders
-        : completedOrders;
+        : activeTab === 'completed'
+          ? completedOrders
+          : [];
 
   return (
     <div
