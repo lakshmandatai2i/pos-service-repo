@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "chef-dashboard",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.28.0",
+    "pos-application": "file:../../..",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3"

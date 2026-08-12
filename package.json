@@ -3,8 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "npm --prefix frontend run dev",
-    "build": "npm --prefix frontend run build",
-    "preview": "npm --prefix frontend run preview"
+    "dev": "npm --prefix services/pos-service/waiter-dashboard run dev",
+    "dev:waiter": "npm --prefix services/pos-service/waiter-dashboard run dev",
+    "dev:chef": "npm --prefix services/pos-service/chef-dashboard run dev",
+    "build": "npm --prefix services/pos-service/waiter-dashboard run build",
+    "build:waiter": "npm --prefix services/pos-service/waiter-dashboard run build",
+    "build:chef": "npm --prefix services/pos-service/chef-dashboard run build",
+    "preview:waiter": "npm --prefix services/pos-service/waiter-dashboard run preview",
+    "preview:chef": "npm --prefix services/pos-service/chef-dashboard run preview"
   }
 }
