@@ -1,13 +1,35 @@
 // Store Manager Dashboard - Mock Data & Store Metrics
 
+const getCurrentFormattedDate = () => {
+  const now = new Date();
+  return now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+};
+
+const getCurrentShortDate = () => {
+  const now = new Date();
+  return now.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  }).replace(/ /g, '-');
+};
+
 export const STORE_INFO = {
   name: "ABC Food Store",
   branch: "Indiranagar, Bengaluru",
   managerName: "Rajesh Sharma",
   role: "Store Manager",
-  date: "10-Aug-2026",
-  formattedDate: "Monday, 10 August 2026",
-  avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250"
+  get date() {
+    return getCurrentShortDate();
+  },
+  get formattedDate() {
+    return getCurrentFormattedDate();
+  }
 };
 
 export const KPI_DATA = {
@@ -67,6 +89,50 @@ export const TODAY_SALES_SUMMARY = {
   targetProgress: 114.2, // Percentage
   avgOrderValue: "₹292.82"
 };
+
+export const WEEKLY_TARGET_PROGRESS_DATA = [
+  { day: "07 Aug", target: 40000, achieved: 38500, percentage: 96.2 },
+  { day: "08 Aug", target: 40000, achieved: 42300, percentage: 105.7 },
+  { day: "09 Aug", target: 40000, achieved: 39150, percentage: 97.8 },
+  { day: "10 Aug", target: 40000, achieved: 45680, percentage: 114.2 },
+  { day: "11 Aug", target: 42000, achieved: 47200, percentage: 112.3 },
+  { day: "12 Aug", target: 45000, achieved: 51800, percentage: 115.1 },
+  { day: "13 Aug", target: 45000, achieved: 49400, percentage: 109.7 }
+];
+
+export const FOOD_QTY_VS_WASTAGE_DATA = [
+  { day: "07 Aug", foodPrepared: 320, foodSold: 285, foodWastedKg: 14.2 },
+  { day: "08 Aug", foodPrepared: 350, foodSold: 315, foodWastedKg: 11.8 },
+  { day: "09 Aug", foodPrepared: 330, foodSold: 298, foodWastedKg: 13.1 },
+  { day: "10 Aug", foodPrepared: 370, foodSold: 332, foodWastedKg: 12.5 },
+  { day: "11 Aug", foodPrepared: 410, foodSold: 375, foodWastedKg: 10.9 },
+  { day: "12 Aug", foodPrepared: 460, foodSold: 412, foodWastedKg: 15.0 },
+  { day: "13 Aug", foodPrepared: 440, foodSold: 395, foodWastedKg: 13.4 }
+];
+
+export const REALTIME_CUSTOMERS_INITIAL = [
+  { time: "9:00 AM", count: 18 },
+  { time: "10:00 AM", count: 34 },
+  { time: "11:00 AM", count: 58 },
+  { time: "12:00 PM", count: 112 },
+  { time: "1:00 PM", count: 148 },
+  { time: "2:00 PM", count: 165 },
+  { time: "3:00 PM", count: 182 },
+  { time: "Current Live", count: 195 }
+];
+
+export const REALTIME_ITEM_INVENTORY_DATA = [
+  { sno: 1, item: "Chicken Biryani", qtyPrepared: 120, qtyRemaining: 35 },
+  { sno: 2, item: "Veg Meals", qtyPrepared: 60, qtyRemaining: 18 },
+  { sno: 3, item: "Paneer Butter Masala", qtyPrepared: 45, qtyRemaining: 7 },
+  { sno: 4, item: "Mutton Biryani", qtyPrepared: 40, qtyRemaining: 8 },
+  { sno: 5, item: "Butter Naan", qtyPrepared: 150, qtyRemaining: 22 },
+  { sno: 6, item: "Chicken 65", qtyPrepared: 50, qtyRemaining: 9 },
+  { sno: 7, item: "Veg Sandwich", qtyPrepared: 30, qtyRemaining: 16 },
+  { sno: 8, item: "Mango Lassi", qtyPrepared: 80, qtyRemaining: 15 },
+  { sno: 9, item: "Gulab Jamun", qtyPrepared: 50, qtyRemaining: 4 },
+  { sno: 10, item: "Cold Coffee", qtyPrepared: 40, qtyRemaining: 12 }
+];
 
 export const HOURLY_SALES_TREND = [
   { hour: "8 AM", orders: 4, revenue: 950 },

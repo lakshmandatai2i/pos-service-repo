@@ -8,14 +8,15 @@ import {
   ChevronLeft, 
   ChevronRight,
   Store,
-  Settings
+  Settings,
+  User
 } from 'lucide-react';
 import { STORE_INFO } from '../data/storeData';
 
 const Sidebar = ({ activeTab, setActiveTab, isCollapsed, setIsCollapsed, mobileOpen, setMobileOpen }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'sales', label: 'Today\'s Sales', icon: TrendingUp },
+    { id: 'sales', label: 'Realtime Analytics', icon: TrendingUp },
     { id: 'reports', label: 'Order History & Reports', icon: FileText },
     { id: 'ai-insights', label: 'AI Insights', icon: Sparkles },
     { id: 'settings', label: 'Settings', icon: Settings },
@@ -27,11 +28,20 @@ const Sidebar = ({ activeTab, setActiveTab, isCollapsed, setIsCollapsed, mobileO
   };
 
   return (
-    <aside 
-      className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}
-      onMouseEnter={() => setIsCollapsed(false)}
-      onMouseLeave={() => setIsCollapsed(true)}
-    >
+    <>
+      {/* Mobile Overlay Backdrop */}
+      {mobileOpen && (
+        <div 
+          className="sidebar-mobile-overlay" 
+          onClick={() => setMobileOpen(false)} 
+        />
+      )}
+
+      <aside 
+        className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}
+        onMouseEnter={() => window.innerWidth > 768 && setIsCollapsed(false)}
+        onMouseLeave={() => window.innerWidth > 768 && setIsCollapsed(true)}
+      >
       <div className="sidebar-header">
         <div className="sidebar-logo">
           <div className="sidebar-logo-icon">
@@ -68,11 +78,9 @@ const Sidebar = ({ activeTab, setActiveTab, isCollapsed, setIsCollapsed, mobileO
 
       <div className="sidebar-footer">
         <div className="manager-mini-card">
-          <img 
-            src={STORE_INFO.avatar} 
-            alt={STORE_INFO.managerName}
-            className="manager-avatar" 
-          />
+          <div className="sidebar-logo-icon" style={{ width: 32, height: 32 }}>
+            <User size={18} />
+          </div>
           {!isCollapsed && (
             <div className="manager-info">
               <span className="manager-name">{STORE_INFO.managerName}</span>
@@ -92,6 +100,7 @@ const Sidebar = ({ activeTab, setActiveTab, isCollapsed, setIsCollapsed, mobileO
         )}
       </div>
     </aside>
+    </>
   );
 };
 

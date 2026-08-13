@@ -1,4 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  TrendingUp, 
+  FileText, 
+  Sparkles, 
+  Settings 
+} from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import KPICards from './components/KPICards';
@@ -51,16 +58,12 @@ function App() {
           {activeTab === 'dashboard' && (
             <>
               <KPICards />
-              <SalesDetails />
-              <ReportsSection />
-              <AIInsights />
             </>
           )}
 
           {activeTab === 'sales' && (
             <>
               <SalesDetails />
-              <KPICards />
             </>
           )}
 
@@ -83,6 +86,45 @@ function App() {
           )}
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation Bar for easy 1-tap tab shifting */}
+      <nav className="mobile-bottom-nav">
+        <button 
+          className={`mobile-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          <LayoutDashboard size={20} />
+          <span>Dashboard</span>
+        </button>
+        <button 
+          className={`mobile-tab-btn ${activeTab === 'sales' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sales')}
+        >
+          <TrendingUp size={20} />
+          <span>Analytics</span>
+        </button>
+        <button 
+          className={`mobile-tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
+          onClick={() => setActiveTab('reports')}
+        >
+          <FileText size={20} />
+          <span>Reports</span>
+        </button>
+        <button 
+          className={`mobile-tab-btn ${activeTab === 'ai-insights' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ai-insights')}
+        >
+          <Sparkles size={20} />
+          <span>AI Insights</span>
+        </button>
+        <button 
+          className={`mobile-tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          <Settings size={20} />
+          <span>Settings</span>
+        </button>
+      </nav>
 
       {/* Floating AI Chatbot Assistant */}
       <Chatbot />

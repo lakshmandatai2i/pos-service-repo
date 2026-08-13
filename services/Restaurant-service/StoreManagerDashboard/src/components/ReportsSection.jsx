@@ -64,7 +64,7 @@ const triggerFileDownload = (data, fileName) => {
   }
 };
 
-const ReportsSection = () => {
+const ReportsSection = ({ globalSearch = '' }) => {
   const [activeTab, setActiveTab] = useState('all'); // 'all' | 'orders'
 
   // Tab 1: All Reports State
@@ -86,12 +86,15 @@ const ReportsSection = () => {
   const [orderCurrentPage, setOrderCurrentPage] = useState(1);
   const [orderRowsPerPage, setOrderRowsPerPage] = useState(5);
 
+  const effectiveAllSearch = globalSearch || allSearch;
+  const effectiveOrderSearch = globalSearch || orderSearch;
+
   // Filter & Sort for All Reports
   const filteredAllReports = useMemo(() => {
     return ALL_REPORTS_DATA.filter(row => {
-      const matchesSearch = row.date.toLowerCase().includes(allSearch.toLowerCase()) ||
-                            row.revenue.toLowerCase().includes(allSearch.toLowerCase()) ||
-                            row.orders.toString().includes(allSearch);
+      const matchesSearch = row.date.toLowerCase().includes(effectiveAllSearch.toLowerCase()) ||
+                            row.revenue.toLowerCase().includes(effectiveAllSearch.toLowerCase()) ||
+                            row.orders.toString().includes(effectiveAllSearch);
       
       const matchesDate = !allDateFilter || row.date.includes(allDateFilter);
       const matchesStatus = allStatusFilter === 'all' || row.status === allStatusFilter;
@@ -110,7 +113,7 @@ const ReportsSection = () => {
       if (aVal > bVal) return allSortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [allSearch, allDateFilter, allStatusFilter, allSortField, allSortDirection]);
+  }, [effectiveAllSearch, allDateFilter, allStatusFilter, allSortField, allSortDirection]);
 
   // Paginated All Reports
   const paginatedAllReports = useMemo(() => {
@@ -123,9 +126,9 @@ const ReportsSection = () => {
   // Filter & Sort for Order Reports
   const filteredOrderReports = useMemo(() => {
     return ORDER_REPORTS_DATA.filter(row => {
-      const matchesSearch = row.item.toLowerCase().includes(orderSearch.toLowerCase()) ||
-                            row.orderId.toLowerCase().includes(orderSearch.toLowerCase()) ||
-                            row.category.toLowerCase().includes(orderSearch.toLowerCase());
+      const matchesSearch = row.item.toLowerCase().includes(effectiveOrderSearch.toLowerCase()) ||
+                            row.orderId.toLowerCase().includes(effectiveOrderSearch.toLowerCase()) ||
+                            row.category.toLowerCase().includes(effectiveOrderSearch.toLowerCase());
       
       const matchesDate = !orderDateFilter || row.date.includes(orderDateFilter);
       const matchesItem = orderItemFilter === 'all' || row.item === orderItemFilter;
@@ -149,7 +152,7 @@ const ReportsSection = () => {
       if (aVal > bVal) return orderSortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [orderSearch, orderDateFilter, orderTimeFilter, orderItemFilter, orderSortField, orderSortDirection]);
+  }, [effectiveOrderSearch, orderDateFilter, orderTimeFilter, orderItemFilter, orderSortField, orderSortDirection]);
 
   // Paginated Order Reports
   const paginatedOrderReports = useMemo(() => {
