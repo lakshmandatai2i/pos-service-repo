@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { supabase, type SupabaseMenuItem } from './supabaseClient';
 
 import {
   MOCK_TABLES, MOCK_NOTIFS,
@@ -51,6 +52,107 @@ export default function Dashboard() {
   const [waiterEmail, setWaiterEmail] = useState('john.waiter@spicegarden.com');
   const [soundAlerts, setSoundAlerts] = useState(true);
   const [quickPin, setQuickPin] = useState(true);
+
+  // Supabase & Take Order Modal State
+  const [showTakeOrderModal, setShowTakeOrderModal] = useState(false);
+  const [takeOrderTable, setTakeOrderTable] = useState<RestaurantTable | null>(null);
+  const [modalMode, setModalMode] = useState<'take_order' | 'add_item'>('take_order');
+  const [menuItems, setMenuItems] = useState<SupabaseMenuItem[]>([
+    { id: '001', name: 'Butter Chicken', price: 600, category: 'Main Course' },
+    { id: '002', name: 'Chicken Biryani', price: 550, category: 'Main Course' },
+    { id: '003', name: 'Veg Biryani', price: 480, category: 'Main Course' },
+    { id: '004', name: 'Paneer Tikka', price: 350, category: 'Starters' },
+    { id: '005', name: 'Garlic Naan', price: 120, category: 'Breads' },
+    { id: '006', name: 'Dal Makhani', price: 450, category: 'Main Course' },
+    { id: '007', name: 'Sweet Lassi', price: 160, category: 'Beverages' },
+    { id: '008', name: 'Mango Lassi', price: 180, category: 'Beverages' },
+    { id: '009', name: 'Gulab Jamun', price: 150, category: 'Desserts' }
+  ]);
+  const [supabaseConnected, setSupabaseConnected] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [menuSearch, setMenuSearch] = useState<string>('');
+  const [itemQuantities, setItemQuantities] = useState<{ [itemId: string]: number }>({});
+
+  // Fetch Live Items from Supabase Database
+  useEffect(() => {
+    async function fetchSupabaseItems() {
+      try {
+        const { data, error } = await supabase.from('items').select('*');
+        if (!error && data && data.length > 0) {
+          setMenuItems(data as SupabaseMenuItem[]);
+          setSupabaseConnected(true);
+        }
+      } catch (err) {
+        console.warn('Could not connect to Supabase items table:', err);
+      }
+    }
+    fetchSupabaseItems();
+  }, []);
+
+  const handleOpenTakeOrder = (table?: RestaurantTable | null, mode: 'take_order' | 'add_item' = 'take_order') => {
+    const target = table || selectedTable || tables.find(t => t.status === 'occupied' || t.status === 'available') || tables[0];
+    setTakeOrderTable(target);
+    setModalMode(mode);
+    setItemQuantities({});
+    setShowTakeOrderModal(true);
+  };
+
+  const handleUpdateQty = (itemId: string, delta: number) => {
+    setItemQuantities(prev => {
+      const current = prev[itemId] || 0;
+      const next = Math.max(0, current + delta);
+      return { ...prev, [itemId]: next };
+    });
+  };
+
+  const handleConfirmOrderItems = () => {
+    if (!takeOrderTable) return;
+
+    const newOrdersToAdd: TableOrder[] = [];
+    Object.entries(itemQuantities).forEach(([itemId, qty]) => {
+      if (qty > 0) {
+        const itemDetail = menuItems.find(m => m.id === itemId);
+        if (itemDetail) {
+          newOrdersToAdd.push({
+            id: Date.now() + Math.floor(Math.random() * 1000),
+            itemName: itemDetail.name,
+            qty: qty,
+            price: Number(itemDetail.price),
+            isNew: true
+          });
+        }
+      }
+    });
+
+    if (newOrdersToAdd.length === 0) return;
+
+    setTables(prev => prev.map(t => {
+      if (t.id === takeOrderTable.id) {
+        const updatedOrders = [...t.orders, ...newOrdersToAdd];
+        const updatedStatus: TableStatus = t.status === 'available' ? 'occupied' : t.status;
+        return { ...t, orders: updatedOrders, status: updatedStatus };
+      }
+      return t;
+    }));
+
+    if (selectedTable && selectedTable.id === takeOrderTable.id) {
+      setSelectedTable(prev => prev ? {
+        ...prev,
+        orders: [...prev.orders, ...newOrdersToAdd],
+        status: prev.status === 'available' ? 'occupied' : prev.status
+      } : null);
+    }
+
+    setLiveToast({
+      id: Date.now(),
+      title: '✅ Order Items Added!',
+      message: `Added ${newOrdersToAdd.reduce((sum, i) => sum + i.qty, 0)} items to Table ${takeOrderTable.number}.`
+    });
+    setTimeout(() => setLiveToast(null), 4000);
+
+    setShowTakeOrderModal(false);
+    setItemQuantities({});
+  };
 
   const chefNotifs = notifs.filter(n => n.type === 'kitchen_ready');
   const unreadNotifs = chefNotifs.filter(n => !n.isRead).length;
@@ -805,12 +907,18 @@ export default function Dashboard() {
 
                 {/* Quick Actions (Take Order & Add Item) */}
                 <div className="p-6 md:p-8 border-b border-white/5 grid grid-cols-2 gap-4">
-                  <button className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b]">
+                  <button
+                    onClick={() => handleOpenTakeOrder(selectedTable, 'take_order')}
+                    className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
+                  >
                     <span className="material-symbols-outlined text-[24px]">receipt_long</span>
                     <span className="text-xs font-bold">Take Order</span>
                   </button>
-                  <button className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b]">
-                    <span className="material-symbols-outlined text-[24px]">restaurant_menu</span>
+                  <button
+                    onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                    className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[24px]">add_circle</span>
                     <span className="text-xs font-bold">Add Item</span>
                   </button>
                 </div>
@@ -903,6 +1011,237 @@ export default function Dashboard() {
 
 
       </nav>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          TAKE ORDER MODAL (SHOWING SUPABASE ITEMS, CATEGORY & PRICE TABLE)
+      ════════════════════════════════════════════════════════════════════════ */}
+      {showTakeOrderModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 md:p-10 bg-[#1a1209]/85 backdrop-blur-xl animate-[popIn_0.2s_ease-out]">
+          <div className={`glass-panel w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden border ${
+            isDark ? 'border-[#f2c35b]/30 bg-[#231a11]' : 'border-stone-300 bg-white'
+          }`}>
+            {/* Header */}
+            <header className="flex justify-between items-center px-6 py-4 border-b border-white/10 bg-[#2d2217] shrink-0">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-[#f2c35b]/20 text-[#f2c35b] flex items-center justify-center">
+                  <span className="material-symbols-outlined">
+                    {modalMode === 'add_item' ? 'add_circle' : 'receipt_long'}
+                  </span>
+                </div>
+                <div>
+                  <h2 className="font-headline text-xl font-bold text-[#f2c35b]">
+                    {modalMode === 'add_item' ? 'Add Item to Order' : 'Take Order'}
+                  </h2>
+                  <p className="text-xs text-[#d2c5b1]">
+                    {modalMode === 'add_item'
+                      ? <>Select additional items to append to <span className="font-bold text-white">Table #{takeOrderTable?.number || 1}</span></>
+                      : <>Select items from menu to add to <span className="font-bold text-white">Table #{takeOrderTable?.number || 1}</span></>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Connection Status Badge */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs font-semibold text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>{supabaseConnected ? 'Supabase Live' : 'Supabase Table'} ({menuItems.length} Items)</span>
+                </div>
+
+                <button
+                  onClick={() => setShowTakeOrderModal(false)}
+                  className="text-[#d2c5b1] hover:text-[#f2c35b] p-2 rounded-full hover:bg-white/5 transition-colors cursor-pointer"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            </header>
+
+            {/* Controls Bar: Table Selector, Search & Category Filters */}
+            <div className="p-4 sm:p-6 border-b border-white/10 bg-[#1c140d]/60 space-y-4 shrink-0">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between">
+                {/* Target Table Selector */}
+                <div className="flex items-center gap-3">
+                  <label className="text-xs font-bold text-[#d2c5b1] uppercase">Target Table:</label>
+                  <select
+                    value={takeOrderTable?.id || tables[0]?.id}
+                    onChange={(e) => {
+                      const found = tables.find(t => t.id === Number(e.target.value));
+                      if (found) setTakeOrderTable(found);
+                    }}
+                    className="bg-[#2d2217] border border-[#f2c35b]/30 text-[#f2c35b] font-bold text-sm rounded-xl px-4 py-2 focus:outline-none focus:border-[#f2c35b] cursor-pointer"
+                  >
+                    {tables.map(t => (
+                      <option key={t.id} value={t.id}>
+                        Table #{t.number} ({t.capacity} Seats - {t.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Search Input */}
+                <div className="relative flex-1 max-w-md">
+                  <span className="material-symbols-outlined absolute left-3 top-2.5 text-sm text-[#d2c5b1]">search</span>
+                  <input
+                    type="text"
+                    placeholder="Search items by name or category..."
+                    value={menuSearch}
+                    onChange={(e) => setMenuSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-[#2d2217] border border-white/10 text-white placeholder-[#d2c5b1]/50 focus:outline-none focus:border-[#f2c35b]"
+                  />
+                </div>
+              </div>
+
+              {/* Category Tabs */}
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                {['All', 'Main Course', 'Starters', 'Breads', 'Beverages', 'Desserts'].map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                      selectedCategory === cat
+                        ? 'bg-[#f2c35b] text-[#261a00] shadow-md'
+                        : 'bg-[#2d2217] text-[#d2c5b1] hover:text-white border border-white/5'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Menu Items Table Content */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              {(() => {
+                const filteredItems = menuItems.filter(item => {
+                  const matchCat = selectedCategory === 'All' || item.category.toLowerCase() === selectedCategory.toLowerCase();
+                  const matchSearch = item.name.toLowerCase().includes(menuSearch.toLowerCase()) || item.category.toLowerCase().includes(menuSearch.toLowerCase());
+                  return matchCat && matchSearch;
+                });
+
+                if (filteredItems.length === 0) {
+                  return (
+                    <div className="text-center py-16 text-[#d2c5b1]">
+                      <span className="material-symbols-outlined text-4xl mb-2 opacity-50">search_off</span>
+                      <p className="text-sm font-semibold">No items match your search or filter</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="rounded-xl border border-white/10 overflow-hidden shadow-lg bg-[#1c140d]/40">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-[#2d2217] text-[#f2c35b] text-xs uppercase tracking-wider border-b border-white/10 font-bold">
+                          <th className="py-3.5 px-4">Item ID</th>
+                          <th className="py-3.5 px-4">Item Name</th>
+                          <th className="py-3.5 px-4">Category</th>
+                          <th className="py-3.5 px-4 text-right">Price</th>
+                          <th className="py-3.5 px-4 text-center">Add Quantity</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5 text-sm">
+                        {filteredItems.map(item => {
+                          const qty = itemQuantities[item.id] || 0;
+                          return (
+                            <tr key={item.id} className="hover:bg-white/5 transition-colors">
+                              <td className="py-3.5 px-4 font-mono text-xs text-[#d2c5b1] font-bold">
+                                #{item.id}
+                              </td>
+                              <td className="py-3.5 px-4 font-bold text-white">
+                                {item.name}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className="inline-block px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#f2c35b]/10 text-[#f2c35b] border border-[#f2c35b]/20">
+                                  {item.category}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-bold text-[#f2c35b]">
+                                ₹{Number(item.price).toFixed(2)}
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                {qty > 0 ? (
+                                  <div className="inline-flex items-center gap-2 bg-[#2d2217] border border-[#f2c35b]/40 rounded-xl p-1">
+                                    <button
+                                      onClick={() => handleUpdateQty(item.id, -1)}
+                                      className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white font-bold flex items-center justify-center cursor-pointer"
+                                    >
+                                      -
+                                    </button>
+                                    <span className="w-6 text-center font-bold text-[#f2c35b] text-sm">{qty}</span>
+                                    <button
+                                      onClick={() => handleUpdateQty(item.id, 1)}
+                                      className="w-7 h-7 rounded-lg bg-[#f2c35b] text-[#261a00] font-bold flex items-center justify-center hover:bg-[#ffe2ab] cursor-pointer"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => handleUpdateQty(item.id, 1)}
+                                    className="px-4 py-1.5 rounded-xl bg-[#f2c35b]/15 text-[#f2c35b] hover:bg-[#f2c35b] hover:text-[#261a00] font-bold text-xs transition-all border border-[#f2c35b]/30 inline-flex items-center gap-1.5 cursor-pointer"
+                                  >
+                                    <span className="material-symbols-outlined text-[16px]">add</span>
+                                    <span>Add</span>
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer Summary & Confirm Order Action */}
+            <footer className="p-4 sm:p-6 border-t border-white/10 bg-[#2d2217] flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
+              <div>
+                {(() => {
+                  const totalQty = Object.values(itemQuantities).reduce((a, b) => a + b, 0);
+                  const totalPrice = Object.entries(itemQuantities).reduce((total, [id, qty]) => {
+                    const item = menuItems.find(m => m.id === id);
+                    return total + (item ? Number(item.price) * qty : 0);
+                  }, 0);
+
+                  return (
+                    <div className="text-left">
+                      <span className="text-xs text-[#d2c5b1]">Selected Items: </span>
+                      <span className="font-bold text-white mr-4">{totalQty} Items</span>
+                      <span className="text-xs text-[#d2c5b1]">Total Price: </span>
+                      <span className="font-headline font-bold text-lg text-[#f2c35b]">₹{totalPrice.toLocaleString()}</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <button
+                  onClick={() => setShowTakeOrderModal(false)}
+                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl border border-white/10 text-xs font-bold text-[#d2c5b1] hover:text-white transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmOrderItems}
+                  disabled={Object.values(itemQuantities).reduce((a, b) => a + b, 0) === 0}
+                  className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#f2c35b] to-[#d4a843] text-[#261a00] font-bold text-xs hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    {modalMode === 'add_item' ? 'add_circle' : 'check_circle'}
+                  </span>
+                  <span>
+                    {modalMode === 'add_item'
+                      ? `Append Items to Table #${takeOrderTable?.number || 1}`
+                      : `Confirm & Create Order for Table #${takeOrderTable?.number || 1}`}
+                  </span>
+                </button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      )}
 
     </div>
   );

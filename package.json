@@ -1,8 +1,10 @@
 {
   "name": "pos-application",
   "version": "1.0.0",
+  "type": "module",
   "private": true,
   "scripts": {
+    "test": "node test-supabase.js",
     "dev": "npm --prefix services/pos-service/waiter-dashboard run dev",
     "dev:waiter": "npm --prefix services/pos-service/waiter-dashboard run dev",
     "dev:chef": "npm --prefix services/pos-service/chef-dashboard run dev",
