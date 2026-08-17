@@ -1,0 +1,37 @@
+[
+  {
+    "userid": "USR-1001",
+    "username": "store_manager",
+    "password": "password123",
+    "role": "STORE_MANAGER",
+    "corporate_id": "CORP-001"
+  },
+  {
+    "userid": "USR-1002",
+    "username": "district_manager",
+    "password": "password123",
+    "role": "DISTRICT_MANAGER",
+    "corporate_id": "CORP-001"
+  },
+  {
+    "userid": "USR-1003",
+    "username": "regional_manager",
+    "password": "password123",
+    "role": "REGIONAL_MANAGER",
+    "corporate_id": "CORP-001"
+  },
+  {
+    "userid": "USR-1004",
+    "username": "corporate_admin",
+    "password": "password123",
+    "role": "CORPORATE",
+    "corporate_id": "CORP-001"
+  },
+  {
+    "userid": "USR-1005",
+    "username": "Adminstrator",
+    "password": "password123",
+    "role": "ADMIN",
+    "corporate_id": "CORP-001"
+  }
+]

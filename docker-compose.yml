@@ -36,12 +36,30 @@ services:
       postgres:
         condition: service_healthy
 
+  mongodb:
+    image: mongo:latest
+    container_name: pos_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-admin123}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-pos_mongo_db}
+    ports:
+      - "${MONGO_PORT:-3000}:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - pos_network
+
 volumes:
   postgres_data:
     driver: local
   pgadmin_data:
     driver: local
+  mongo_data:
+    driver: local
 
 networks:
   pos_network:
     driver: bridge
+
