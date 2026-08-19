@@ -122,42 +122,58 @@ Make sure you run `use pos_mongo_db` before executing these queries.
 
 ### ➕ Create (Insert Documents)
 
-#### Insert a Single Document
+#### Insert a Single Order
 ```javascript
+use pos_mongo_db;
+
 db.orders.insertOne({
-  orderId: "ORD-101",
-  customer: "John Doe",
-  tableNumber: 5,
+  id: 1771490933000,
+  ticketNo: "#8901",
+  store_id: "STORE-001",
+  tableNumber: 1,
+  waiterName: "John",
+  status: "pending",
   items: [
-    { name: "Burger", qty: 2, price: 12.50 },
-    { name: "Fries", qty: 1, price: 4.00 }
+    { id: 1, itemName: "Butter Chicken", qty: 2, price: 600.0, note: "Mild spice" },
+    { id: 2, itemName: "Garlic Naan", qty: 4, price: 120.0 }
   ],
-  totalAmount: 29.00,
-  status: "PENDING",
+  notes: "Serve appetizers first",
   createdAt: new Date()
 })
 ```
 
-#### Insert Multiple Documents
+#### Insert Multiple Orders
 ```javascript
+use pos_mongo_db;
+
 db.orders.insertMany([
   {
-    orderId: "ORD-102",
-    customer: "Jane Smith",
-    tableNumber: 3,
-    items: [{ name: "Pasta", qty: 1, price: 16.00 }],
-    totalAmount: 16.00,
-    status: "COMPLETED",
+    id: 1771490934000,
+    ticketNo: "#8902",
+    store_id: "STORE-001",
+    tableNumber: 4,
+    waiterName: "John",
+    status: "preparing",
+    items: [
+      { id: 3, itemName: "Paneer Tikka", qty: 1, price: 350.0 },
+      { id: 4, itemName: "Dal Makhani", qty: 2, price: 450.0 }
+    ],
+    notes: "Extra gravy",
     createdAt: new Date()
   },
   {
-    orderId: "ORD-103",
-    customer: "Alice Johnson",
-    tableNumber: 8,
-    items: [{ name: "Pizza", qty: 1, price: 18.00 }],
-    totalAmount: 18.00,
-    status: "PREPARING",
-    createdAt: new Date()
+    id: 1771490935000,
+    ticketNo: "#8903",
+    store_id: "STORE-001",
+    tableNumber: 2,
+    waiterName: "Sarah",
+    status: "completed",
+    items: [
+      { id: 5, itemName: "Chicken Biryani", qty: 2, price: 550.0 },
+      { id: 6, itemName: "Mango Lassi", qty: 2, price: 180.0 }
+    ],
+    createdAt: new Date(),
+    preparedAt: new Date()
   }
 ])
 ```

@@ -5,7 +5,6 @@ import {
 import {
   getStoredOrders,
   updateOrderStatus,
-  sendOrderToKitchen,
   subscribeKDSUpdates,
   type KDSOrder
 } from './kdsStore';
@@ -17,6 +16,24 @@ function timeAgo(iso?: string): string {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 60) return `${Math.max(1, m)}m ago`;
   return `${Math.floor(m / 60)}h ${m % 60}m ago`;
+}
+
+function formatLiveDate(date: Date): string {
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+}
+
+function formatLiveTime(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
 }
 
 function getInitials(name: string): string {
@@ -41,6 +58,16 @@ export default function Dashboard() {
   const [chefEmail, setChefEmail] = useState('marco.chef@spicegarden.com');
   const [audioAlerts, setAudioAlerts] = useState(true);
   const [ticketSize, setTicketSize] = useState<'normal' | 'large'>('normal');
+
+  // Live Date & Time Clock State (Locks to current operating date)
+  const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentDateTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Subscribe to real-time order updates from Waiter POS or other tabs
   useEffect(() => {
@@ -82,44 +109,24 @@ export default function Dashboard() {
 
   // Action: Chef confirms pending order -> moves to preparing
   const handleConfirm = useCallback((id: number) => {
-    const result = updateOrderStatus(id, 'preparing');
+    const target = orders.find(o => o.id === id);
+    if (target && target.items) {
+      target.items.forEach(i => { i.isNew = false; });
+    }
+    const result = updateOrderStatus(id, 'preparing', target?.tableNumber);
     setOrders(result.orders);
-  }, []);
+  }, [orders]);
 
   // Action: Chef marks prepared -> moves to completed & sends waiter notification
   const handlePrepared = useCallback((id: number) => {
-    const result = updateOrderStatus(id, 'completed');
+    const targetOrder = orders.find(o => o.id === id);
+    const result = updateOrderStatus(id, 'completed', targetOrder?.tableNumber);
     setOrders(result.orders);
-    const targetOrder = result.orders.find(o => o.id === id);
     if (targetOrder) {
       triggerWaiterNotif(targetOrder);
     }
-  }, [triggerWaiterNotif]);
+  }, [orders, triggerWaiterNotif]);
 
-  // Action: Simulate incoming new order from POS / Waiter
-  const handleSimulateNewOrder = () => {
-    const randomTable = Math.floor(Math.random() * 12) + 1;
-    const randomTicket = `#${Math.floor(1000 + Math.random() * 9000)}`;
-    const newOrder: KDSOrder = {
-      id: Date.now(),
-      ticketNo: randomTicket,
-      tableNumber: randomTable,
-      section: randomTable > 8 ? 'Patio' : 'Main Dining',
-      guestCount: Math.floor(Math.random() * 4) + 2,
-      waiterName: 'John',
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      notes: 'Urgent order - extra crispy',
-      items: [
-        { id: 1, itemName: 'Paneer Butter Masala', qty: 2, price: 420 },
-        { id: 2, itemName: 'Butter Naan', qty: 4, price: 90 },
-        { id: 3, itemName: 'Jeera Rice', qty: 1, price: 220, isNew: true },
-      ]
-    };
-    const updated = sendOrderToKitchen(newOrder);
-    setOrders(updated);
-    setActiveTab('pending');
-  };
 
   const currentTabOrders =
     activeTab === 'pending'
@@ -356,14 +363,17 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 relative">
-            {/* Quick Action: Simulate Order */}
-            <button
-              onClick={handleSimulateNewOrder}
-              className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#f2c35b]/10 text-[#f2c35b] border border-[#f2c35b]/30 hover:bg-[#f2c35b] hover:text-[#261a00] transition-all flex items-center gap-2 shadow-sm"
+            {/* Live Date & Time Display (Current Operating Date Only) */}
+            <div 
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#2a2016] border border-[#f2c35b]/30 text-xs font-semibold shadow-sm"
+              title="Current Operating Date & Time (Active Today)"
             >
-              <span className="material-symbols-outlined text-[18px]">add_circle</span>
-              <span>+ Simulate New Order</span>
-            </button>
+              <span className="material-symbols-outlined text-[18px] text-[#f2c35b]">calendar_today</span>
+              <span className="text-[#f2c35b] font-medium">{formatLiveDate(currentDateTime)}</span>
+              <span className="text-white/30">•</span>
+              <span className="material-symbols-outlined text-[18px] text-emerald-400">schedule</span>
+              <span className="text-white font-mono">{formatLiveTime(currentDateTime)}</span>
+            </div>
 
             {/* Account Profile Photo Button */}
             <div className="relative">
@@ -470,7 +480,7 @@ export default function Dashboard() {
                       </span>
                     </div>
                     <p className="text-xs text-[#d2c5b1]/70 mt-0.5">
-                      {order.section} • {order.guestCount} Guests
+                      {order.section}
                     </p>
                   </div>
 
@@ -501,23 +511,43 @@ export default function Dashboard() {
 
                 {/* Items List */}
                 <div className="flex-1 space-y-2.5 my-2">
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#d2c5b1]/60">
-                    Items ({totalItems})
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-[#d2c5b1]/60">
+                      Items ({totalItems})
+                    </p>
+                    {order.items.some(i => i.isNew) && (
+                      <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        + New Items Added
+                      </span>
+                    )}
+                  </div>
                   {order.items.map(item => (
                     <div
                       key={item.id}
-                      className="flex justify-between items-center bg-black/10 p-2.5 rounded-xl text-sm"
+                      className={`flex justify-between items-center p-2.5 rounded-xl text-sm border transition-all ${
+                        item.isNew
+                          ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                          : 'bg-black/10 border-white/5 text-[#f1dfd0]'
+                      }`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-lg bg-[#f2c35b]/20 text-[#f2c35b] font-bold text-xs flex items-center justify-center shrink-0">
+                        <span className={`w-6 h-6 rounded-lg font-bold text-xs flex items-center justify-center shrink-0 ${
+                          item.isNew ? 'bg-emerald-500/30 text-emerald-300' : 'bg-[#f2c35b]/20 text-[#f2c35b]'
+                        }`}>
                           {item.qty}x
                         </span>
-                        <span className="font-semibold text-[#f1dfd0]">{item.itemName}</span>
+                        <span className="font-semibold">{item.itemName}</span>
                       </div>
-                      {item.note && (
-                        <span className="text-xs text-[#d2c5b1]/70 italic">({item.note})</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {item.note && (
+                          <span className="text-xs text-[#d2c5b1]/70 italic">({item.note})</span>
+                        )}
+                        {item.isNew && (
+                          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950 shadow-sm">
+                            NEW
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

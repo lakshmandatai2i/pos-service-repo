@@ -2,14 +2,14 @@ import { useState, useCallback, useEffect } from 'react';
 import { supabase, type SupabaseMenuItem } from './supabaseClient';
 
 import {
-  MOCK_TABLES, MOCK_NOTIFS,
   type RestaurantTable, type POSNotif, type TableStatus, type ActiveView, type TableOrder
-} from './data';
+} from './types';
 import {
   sendOrderToKitchen,
   subscribeKDSUpdates,
   type KDSOrder
 } from './kdsStore';
+import { tableService, menuService, orderService } from './api-services';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,6 +22,30 @@ function timeAgo(iso?: string): string {
 
 function calcSubtotal(orders: TableOrder[]): number {
   return orders.reduce((s, o) => s + o.price * o.qty, 0);
+}
+
+function formatLiveDate(date: Date): string {
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+}
+
+function formatLiveTime(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
+function generateTicketNo(storeId: string = 'STORE-001', tableNumber: number): string {
+  const strDigits = storeId.replace(/\D/g, '').padStart(3, '0') || '001';
+  const tblDigits = String(tableNumber).padStart(2, '0');
+  return `#${strDigits}${tblDigits}`;
 }
 
 function getInitials(name: string): string {
@@ -38,8 +62,8 @@ function getInitials(name: string): string {
 export default function Dashboard() {
   const [isDark, setIsDark] = useState(true);
   const [activeTab, setActiveTab] = useState<ActiveView>('tables');
-  const [tables, setTables] = useState<RestaurantTable[]>(MOCK_TABLES);
-  const [notifs, setNotifs] = useState<POSNotif[]>(MOCK_NOTIFS);
+  const [tables, setTables] = useState<RestaurantTable[]>([]);
+  const [notifs, setNotifs] = useState<POSNotif[]>([]);
   const [selectedTable, setSelectedTable] = useState<RestaurantTable | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<TableStatus | 'all'>('all');
@@ -73,21 +97,170 @@ export default function Dashboard() {
   const [menuSearch, setMenuSearch] = useState<string>('');
   const [itemQuantities, setItemQuantities] = useState<{ [itemId: string]: number }>({});
 
-  // Fetch Live Items from Supabase Database
+  const [tableFetchError, setTableFetchError] = useState<string | null>(null);
+
+  // Payment Checkout Modal State
+  const [paymentModalTable, setPaymentModalTable] = useState<RestaurantTable | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'Card' | 'Cash' | 'UPI'>('Card');
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+  // Live Date & Time Clock State (Locks to current operating date)
+  const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
+
   useEffect(() => {
-    async function fetchSupabaseItems() {
+    const timer = setInterval(() => {
+      setCurrentDateTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+
+
+  const refreshTables = useCallback(async () => {
+    try {
+      setTableFetchError(null);
+      const mappedTables = await tableService.getTables('STORE-001');
+      if (mappedTables && mappedTables.length > 0) {
+        setTables(prev => {
+          return mappedTables.map(newT => {
+            const existing = prev.find(p => p.number === newT.number);
+            const freshOrders = newT.status === 'available'
+              ? []
+              : (newT.orders && newT.orders.length > 0 ? newT.orders : (existing?.orders || []));
+            const ticketNo = newT.status === 'available' ? undefined : (newT.ticketNo || existing?.ticketNo);
+
+            return {
+              ...newT,
+              status: newT.status,
+              orders: freshOrders,
+              ticketNo
+            };
+          });
+        });
+
+        setSelectedTable(prevSelected => {
+          if (!prevSelected) return null;
+          const fresh = mappedTables.find(m => m.number === prevSelected.number);
+          if (fresh) {
+            const freshOrders = fresh.status === 'available'
+              ? []
+              : (fresh.orders && fresh.orders.length > 0 ? fresh.orders : (prevSelected.orders || []));
+            return {
+              ...fresh,
+              orders: freshOrders,
+              ticketNo: fresh.status === 'available' ? undefined : (fresh.ticketNo || prevSelected.ticketNo)
+            };
+          }
+          return prevSelected;
+        });
+      } else {
+        setTables([]);
+        setTableFetchError('No tables found in Supabase database.');
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || 'No tables found in Supabase database.';
+      setTableFetchError(errMsg);
+      setTables([]);
+      console.warn('Table API fetch exception:', err);
+    }
+  }, []);
+
+  // Real-time Supabase Webhook / Realtime listener for live restaurant table updates
+  useEffect(() => {
+    refreshTables();
+
+    const channel = supabase
+      .channel('realtime_tables_channel')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'restaurant_tables',
+        },
+        (payload) => {
+          console.log('⚡ Real-time table change received from Supabase:', payload);
+          const record = (payload.new && Object.keys(payload.new).length > 0 ? payload.new : payload.old) as any;
+          if (!record || !record.table_number) {
+            refreshTables();
+            return;
+          }
+
+          const updatedTableNum = Number(record.table_number);
+          const updatedStatus = (String(record.status || 'available').trim().toLowerCase()) as TableStatus;
+
+          setTables(prev => {
+            const exists = prev.some(t => t.number === updatedTableNum);
+            if (exists) {
+              return prev.map(t =>
+                t.number === updatedTableNum
+                  ? { ...t, status: updatedStatus }
+                  : t
+              );
+            } else {
+              return [
+                ...prev,
+                {
+                  id: updatedTableNum,
+                  number: updatedTableNum,
+                  store_id: record.store_id || 'STORE-001',
+                  store_name: record.store_name || 'Spice Garden Main',
+                  status: updatedStatus,
+                  orders: [],
+                }
+              ].sort((a, b) => a.number - b.number);
+            }
+          });
+
+          // Trigger live toast alert on status change so waiter takes instant action
+          if (updatedStatus === 'ready') {
+            setLiveToast({
+              id: Date.now(),
+              title: `⚡ Table ${updatedTableNum} Order Ready!`,
+              message: `Order for Table ${updatedTableNum} is prepared. Ready to serve immediately!`
+            });
+            setTimeout(() => setLiveToast(null), 5000);
+          } else if (updatedStatus === 'preparing') {
+            setLiveToast({
+              id: Date.now(),
+              title: `👨‍🍳 Chef Accepted - Table ${updatedTableNum} Preparing`,
+              message: `Chef accepted order for Table ${updatedTableNum}. Food is now preparing in kitchen!`
+            });
+            setTimeout(() => setLiveToast(null), 4000);
+          } else if (updatedStatus === 'order_sent') {
+            setLiveToast({
+              id: Date.now(),
+              title: `⚡ Table ${updatedTableNum} Order Sent to Kitchen`,
+              message: `Order sent. Awaiting Chef to accept & start preparing.`
+            });
+            setTimeout(() => setLiveToast(null), 4000);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [refreshTables]);
+
+  // Fetch Live Menu Items directly from Supabase 'items' table
+  useEffect(() => {
+    async function fetchMenuItems() {
       try {
-        const { data, error } = await supabase.from('items').select('*');
-        if (!error && data && data.length > 0) {
+        const data = await menuService.getMenu();
+        if (data && data.length > 0) {
           setMenuItems(data as SupabaseMenuItem[]);
           setSupabaseConnected(true);
         }
       } catch (err) {
-        console.warn('Could not connect to Supabase items table:', err);
+        console.warn('Could not fetch items from Supabase:', err);
       }
     }
-    fetchSupabaseItems();
+    fetchMenuItems();
   }, []);
+
+
 
   const handleOpenTakeOrder = (table?: RestaurantTable | null, mode: 'take_order' | 'add_item' = 'take_order') => {
     const target = table || selectedTable || tables.find(t => t.status === 'occupied' || t.status === 'available') || tables[0];
@@ -105,9 +278,10 @@ export default function Dashboard() {
     });
   };
 
-  const handleConfirmOrderItems = () => {
+  const handleConfirmOrderItems = async () => {
     if (!takeOrderTable) return;
 
+    const isFirstOrder = takeOrderTable.orders.length === 0;
     const newOrdersToAdd: TableOrder[] = [];
     Object.entries(itemQuantities).forEach(([itemId, qty]) => {
       if (qty > 0) {
@@ -118,7 +292,8 @@ export default function Dashboard() {
             itemName: itemDetail.name,
             qty: qty,
             price: Number(itemDetail.price),
-            isNew: true
+            isNew: isFirstOrder ? false : true,
+            sentToKitchen: false
           });
         }
       }
@@ -126,11 +301,12 @@ export default function Dashboard() {
 
     if (newOrdersToAdd.length === 0) return;
 
+    const nextStatus: TableStatus = 'occupied';
+    const updatedOrders = [...takeOrderTable.orders, ...newOrdersToAdd];
+
     setTables(prev => prev.map(t => {
       if (t.id === takeOrderTable.id) {
-        const updatedOrders = [...t.orders, ...newOrdersToAdd];
-        const updatedStatus: TableStatus = t.status === 'available' ? 'occupied' : t.status;
-        return { ...t, orders: updatedOrders, status: updatedStatus };
+        return { ...t, orders: updatedOrders, status: nextStatus };
       }
       return t;
     }));
@@ -138,24 +314,202 @@ export default function Dashboard() {
     if (selectedTable && selectedTable.id === takeOrderTable.id) {
       setSelectedTable(prev => prev ? {
         ...prev,
-        orders: [...prev.orders, ...newOrdersToAdd],
-        status: prev.status === 'available' ? 'occupied' : prev.status
+        orders: updatedOrders,
+        status: nextStatus
       } : null);
     }
 
-    setLiveToast({
-      id: Date.now(),
-      title: '✅ Order Items Added!',
-      message: `Added ${newOrdersToAdd.reduce((sum, i) => sum + i.qty, 0)} items to Table ${takeOrderTable.number}.`
-    });
-    setTimeout(() => setLiveToast(null), 4000);
+    try {
+      await tableService.updateTableStatus(takeOrderTable.number, nextStatus, updatedOrders);
+    } catch (err) {
+      console.warn('Update table status occupied warning:', err);
+    }
 
     setShowTakeOrderModal(false);
     setItemQuantities({});
   };
 
+  const handleConfirmAndSendDirectToKitchen = async () => {
+    if (!takeOrderTable) return;
+
+    const isFirstOrder = takeOrderTable.orders.length === 0;
+    const newOrdersToAdd: TableOrder[] = [];
+    Object.entries(itemQuantities).forEach(([itemId, qty]) => {
+      if (qty > 0) {
+        const itemDetail = menuItems.find(m => m.id === itemId);
+        if (itemDetail) {
+          newOrdersToAdd.push({
+            id: Date.now() + Math.floor(Math.random() * 1000),
+            itemName: itemDetail.name,
+            qty: qty,
+            price: Number(itemDetail.price),
+            isNew: isFirstOrder ? false : true,
+            sentToKitchen: true
+          });
+        }
+      }
+    });
+
+    if (newOrdersToAdd.length === 0) return;
+
+    const updatedOrders = [...takeOrderTable.orders, ...newOrdersToAdd].map(o => ({ ...o, sentToKitchen: true }));
+    const ticketNo = takeOrderTable.ticketNo || generateTicketNo(takeOrderTable.store_id, takeOrderTable.number);
+
+    const newKDSOrder: KDSOrder = {
+      id: takeOrderTable.number,
+      ticketNo,
+      tableNumber: takeOrderTable.number,
+      section: takeOrderTable.store_name || 'Spice Garden Main',
+      waiterName: waiterName || 'John',
+      status: 'pending',
+      items: updatedOrders.map(o => ({
+        id: o.id,
+        itemName: o.itemName,
+        qty: o.qty,
+        price: o.price,
+        note: o.note,
+        isNew: Boolean(o.isNew)
+      })),
+      notes: updatedOrders.map(o => o.note).filter(Boolean).join(', '),
+      createdAt: new Date().toISOString()
+    };
+
+    sendOrderToKitchen(newKDSOrder);
+
+    // Update local table state
+    setTables(prev => prev.map(t => t.id === takeOrderTable.id ? { ...t, status: 'order_sent', orders: updatedOrders, ticketNo } : t));
+
+    // Return back to dashboard view
+    setShowTakeOrderModal(false);
+    setSelectedTable(null);
+    setItemQuantities({});
+
+    // Persist real-time order update to Supabase
+    try {
+      await tableService.updateTableStatus(takeOrderTable.number, 'order_sent', updatedOrders, ticketNo);
+    } catch (err) {
+      console.warn('Real-time Supabase update error:', err);
+    }
+
+    // Dispatch order to MongoDB WebSocket broadcaster
+    try {
+      await fetch('http://localhost:8000/api/kitchen/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableNumber: takeOrderTable.number,
+          store_id: takeOrderTable.store_id || 'STORE-001',
+          waiterName: waiterName || 'John',
+          items: newKDSOrder.items,
+          notes: newKDSOrder.notes
+        })
+      });
+    } catch (e) {
+      console.warn('Kitchen WebSocket broadcast fetch warning:', e);
+    }
+
+    // Trigger toast notification
+    setLiveToast({
+      id: Date.now(),
+      title: `🚀 Order ${ticketNo} Sent to Kitchen`,
+      message: `Table ${takeOrderTable.number} order has been sent to chef.`
+    });
+    setTimeout(() => setLiveToast(null), 4000);
+  };
+
   const chefNotifs = notifs.filter(n => n.type === 'kitchen_ready');
   const unreadNotifs = chefNotifs.filter(n => !n.isRead).length;
+
+  // ─── Native MongoDB WebSocket Listener for Live Status Updates ───────────────
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    try {
+      const wsUrl = `ws://${window.location.hostname || 'localhost'}:8000/ws/kds`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('⚡ Waiter Dashboard connected to MongoDB WebSocket Engine at:', wsUrl);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if ((data.type === 'STATUS_CHANGE' || data.type === 'ORDER_PREPARED') && data.order) {
+            const changedOrder = data.order;
+            const targetTableNum = Number(changedOrder.tableNumber || changedOrder.id);
+            const targetStatus: TableStatus = 
+              changedOrder.status === 'completed' || changedOrder.status === 'ready'
+                ? 'ready'
+                : changedOrder.status === 'preparing'
+                  ? 'preparing'
+                  : 'order_sent';
+
+            // Update table status live on Waiter Dashboard
+            setTables(prev => prev.map(t => (t.number === targetTableNum || t.id === targetTableNum) ? { ...t, status: targetStatus } : t));
+            
+            if (selectedTable && (selectedTable.number === targetTableNum || selectedTable.id === targetTableNum)) {
+              setSelectedTable(prev => prev ? { ...prev, status: targetStatus } : null);
+            }
+
+            // Trigger real-time toast alert & notification when ready
+            if (changedOrder.status === 'completed' || changedOrder.status === 'ready' || data.type === 'ORDER_PREPARED') {
+              setLiveToast({
+                id: Date.now(),
+                title: `🔔 Order ${changedOrder.ticketNo || '#00101'} Prepared!`,
+                message: `Table ${targetTableNum} order is ready to serve.`
+              });
+
+              setNotifs(prev => [
+                {
+                  id: Date.now(),
+                  type: 'kitchen_ready',
+                  message: `Order ${changedOrder.ticketNo || '#00101'} for Table ${targetTableNum} is prepared!`,
+                  detail: `Ready to serve (${changedOrder.items ? changedOrder.items.length : 0} items)`,
+                  tableNumber: targetTableNum,
+                  isRead: false,
+                  createdAt: new Date().toISOString()
+                },
+                ...prev
+              ]);
+              setTimeout(() => setLiveToast(null), 5000);
+            }
+          }
+        } catch (e) {
+          console.warn('Waiter WebSocket parse warning:', e);
+        }
+      };
+    } catch (err) {
+      console.warn('Could not establish Waiter WebSocket connection:', err);
+    }
+
+    return () => {
+      ws?.close();
+    };
+  }, [selectedTable]);
+
+  // ─── Supabase Realtime Postgres Changes Subscription ───────────────────────
+  useEffect(() => {
+    const supabaseChannel = supabase
+      .channel('waiter_dashboard_realtime_tables')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_tables' }, (payload: any) => {
+        if (payload.new) {
+          const updatedTable = payload.new;
+          const tableNum = Number(updatedTable.table_number || updatedTable.id);
+          const newStatus = (updatedTable.status || 'available').toString().trim().toLowerCase() as TableStatus;
+
+          setTables(prev => prev.map(t => (t.number === tableNum || t.id === tableNum) ? { ...t, status: newStatus } : t));
+          if (selectedTable && (selectedTable.number === tableNum || selectedTable.id === tableNum)) {
+            setSelectedTable(prev => prev ? { ...prev, status: newStatus } : null);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(supabaseChannel);
+    };
+  }, [selectedTable]);
 
   // Real-time listener for chef order status updates (e.g. Order Prepared)
   useEffect(() => {
@@ -189,8 +543,22 @@ export default function Dashboard() {
         setTimeout(() => setLiveToast(null), 5000);
       } else if (data.type === 'STATUS_CHANGE' && data.order) {
         const changedOrder = data.order;
-        const targetStatus: TableStatus = changedOrder.status === 'completed' ? 'ready' : changedOrder.status === 'preparing' ? 'preparing' : 'occupied';
+        const statusStr = (changedOrder.status as string || 'available').toLowerCase();
+        if (statusStr === 'available') return;
+
+        const targetStatus: TableStatus = 
+          statusStr === 'completed' || statusStr === 'ready'
+            ? 'ready'
+            : statusStr === 'preparing'
+              ? 'preparing'
+              : statusStr === 'order_sent' || statusStr === 'pending'
+                ? 'order_sent'
+                : 'available';
+
         setTables(prev => prev.map(t => t.number === changedOrder.tableNumber ? { ...t, status: targetStatus } : t));
+        if (selectedTable && selectedTable.number === changedOrder.tableNumber) {
+          setSelectedTable(prev => prev ? { ...prev, status: targetStatus } : null);
+        }
       }
     });
 
@@ -201,7 +569,8 @@ export default function Dashboard() {
   const filteredTables = tables.filter(t => {
     const matchStatus = statusFilter === 'all' || t.status === statusFilter;
     const matchSearch = t.number.toString().includes(searchQuery) ||
-      t.section.toLowerCase().includes(searchQuery.toLowerCase());
+      (t.store_name && t.store_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.store_id && t.store_id.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchStatus && matchSearch;
   });
 
@@ -211,30 +580,36 @@ export default function Dashboard() {
 
 
 
-  const handleStatusChange = useCallback((tableId: number, nextStatus: TableStatus) => {
+  const handleStatusChange = useCallback(async (tableId: number, nextStatus: TableStatus) => {
     setTables(prev => prev.map(t => t.id === tableId ? { ...t, status: nextStatus } : t));
     if (selectedTable && selectedTable.id === tableId) {
       setSelectedTable(prev => prev ? { ...prev, status: nextStatus } : null);
     }
+    try {
+      await tableService.updateTableStatus(tableId, nextStatus);
+    } catch (err) {
+      console.warn('Real-time table status update warning:', err);
+    }
   }, [selectedTable]);
 
-  const handleSendToKitchen = useCallback((table: RestaurantTable) => {
+  const handleSendToKitchen = useCallback(async (table: RestaurantTable) => {
     if (!table.orders || table.orders.length === 0) return;
-    const ticketNo = table.ticketNo || `#${8900 + table.number}`;
+    const ticketNo = table.ticketNo || generateTicketNo(table.store_id, table.number);
+
     const newKDSOrder: KDSOrder = {
       id: Date.now(),
       ticketNo,
       tableNumber: table.number,
-      section: table.section,
-      guestCount: table.capacity,
-      waiterName: 'John',
+      section: table.store_name || 'Spice Garden Main',
+      waiterName: waiterName || 'John',
       status: 'pending',
       items: table.orders.map(o => ({
         id: o.id,
         itemName: o.itemName,
         qty: o.qty,
         price: o.price,
-        note: o.note
+        note: o.note,
+        isNew: o.isNew || false
       })),
       notes: table.orders.map(o => o.note).filter(Boolean).join(', '),
       createdAt: new Date().toISOString()
@@ -242,18 +617,142 @@ export default function Dashboard() {
 
     sendOrderToKitchen(newKDSOrder);
 
-    // Update table status to preparing
-    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'preparing', ticketNo } : t));
-    if (selectedTable && selectedTable.id === table.id) {
-      setSelectedTable(prev => prev ? { ...prev, status: 'preparing', ticketNo } : null);
+    const sentOrders = table.orders.map(o => ({ ...o, sentToKitchen: true }));
+
+    // Update table status to order_sent when sent to kitchen
+    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'order_sent', orders: sentOrders, ticketNo } : t));
+
+    // Return back to main dashboard view
+    setSelectedTable(null);
+    setShowTakeOrderModal(false);
+
+    try {
+      await tableService.updateTableStatus(table.number, 'order_sent', sentOrders, ticketNo);
+    } catch (err) {
+      console.warn('Update table status error:', err);
+    }
+
+    // Dispatch order to MongoDB WebSocket broadcaster
+    try {
+      await fetch('http://localhost:8000/api/kitchen/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableNumber: table.number,
+          store_id: table.store_id || 'STORE-001',
+          waiterName: waiterName || 'John',
+          items: newKDSOrder.items,
+          notes: newKDSOrder.notes
+        })
+      });
+    } catch (e) {
+      console.warn('Kitchen WebSocket broadcast fetch warning:', e);
     }
 
     setLiveToast({
       id: Date.now(),
-      title: `Order ${ticketNo} Sent to Kitchen`,
+      title: `🚀 Order ${ticketNo} Sent to Kitchen`,
       message: `Table ${table.number} order has been sent to chef.`
     });
     setTimeout(() => setLiveToast(null), 4000);
+  }, [waiterName]);
+
+  const handleFinishOrder = useCallback((table: RestaurantTable) => {
+    setPaymentModalTable(table);
+    setSelectedPaymentMethod('Card');
+  }, []);
+
+  const handleConfirmPaymentAndCompleteOrder = async () => {
+    if (!paymentModalTable) return;
+    setIsProcessingPayment(true);
+
+    const subtotal = calcSubtotal(paymentModalTable.orders);
+    const gst = subtotal * 0.05;
+    const serviceCharge = subtotal * 0.10;
+    const grandTotal = Math.round(subtotal + gst + serviceCharge);
+    const ticketNo = paymentModalTable.ticketNo || generateTicketNo(paymentModalTable.store_id, paymentModalTable.number);
+
+    // 1. Store clean order in MongoDB ONLY after payment is confirmed successful
+    try {
+      await orderService.createOrder({
+        tableNumber: paymentModalTable.number,
+        store_id: paymentModalTable.store_id || 'STORE-001',
+        waiterName: waiterName || 'John',
+        items: paymentModalTable.orders.map(o => ({
+          id: o.id,
+          itemName: o.itemName,
+          qty: o.qty,
+          price: o.price,
+          note: o.note,
+          isNew: Boolean(o.isNew)
+        })),
+        notes: paymentModalTable.orders.map(o => o.note).filter(Boolean).join(', '),
+        paymentMethod: selectedPaymentMethod,
+        grandTotal: grandTotal,
+        paymentStatus: 'COMPLETED'
+      });
+    } catch (err) {
+      console.warn('MongoDB order creation on payment warning:', err);
+    }
+
+    // 2. Mark table as available in Supabase and clear orders payload
+    try {
+      await tableService.updateTableStatus(paymentModalTable.number, 'available', [], null as any);
+    } catch (err) {
+      try {
+        await supabase
+          .from('restaurant_tables')
+          .update({ status: 'available', orders: [], ticketNo: null, updated_at: new Date().toISOString() })
+          .eq('table_number', paymentModalTable.number);
+      } catch (e) {
+        console.warn('Could not update table status in Supabase:', e);
+      }
+    }
+
+    // Broadcast table status reset to Chef KDS so active tickets drop immediately
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const ch = new BroadcastChannel('kds_kitchen_workflow_channel');
+        ch.postMessage({ type: 'STATUS_CHANGE', order: { tableNumber: paymentModalTable.number, status: 'available' } });
+        ch.close();
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel clear error:', e);
+    }
+
+    // 3. Reset local table state
+    setTables(prev => prev.map(t => t.id === paymentModalTable.id ? { ...t, status: 'available', orders: [], ticketNo: undefined } : t));
+    if (selectedTable && selectedTable.id === paymentModalTable.id) {
+      setSelectedTable(null);
+    }
+
+    // 4. Trigger celebration toast & close payment modal
+    setLiveToast({
+      id: Date.now(),
+      title: `🎉 Payment Successful via ${selectedPaymentMethod}!`,
+      message: `Order ${ticketNo} paid (₹${grandTotal.toLocaleString()}). Table ${paymentModalTable.number} is now Available.`
+    });
+    setTimeout(() => setLiveToast(null), 5000);
+
+    setIsProcessingPayment(false);
+    setPaymentModalTable(null);
+  };
+
+  const handleRemoveOrderItem = useCallback((tableId: number, orderItemId: number) => {
+    setTables(prev => prev.map(t => {
+      if (t.id === tableId) {
+        const updatedOrders = t.orders.filter(item => item.id !== orderItemId);
+        return { ...t, orders: updatedOrders };
+      }
+      return t;
+    }));
+
+    if (selectedTable && selectedTable.id === tableId) {
+      setSelectedTable(prev => prev ? {
+        ...prev,
+        orders: prev.orders.filter(item => item.id !== orderItemId)
+      } : null);
+    }
   }, [selectedTable]);
 
   return (
@@ -388,6 +887,30 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 relative">
+            {/* Live Date & Time Display (Current Operating Date Only) */}
+            <div 
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#2a2016] border border-[#f2c35b]/30 text-xs font-semibold shadow-sm"
+              title="Current Operating Date & Time (Active Today)"
+            >
+              <span className="material-symbols-outlined text-[18px] text-[#f2c35b]">calendar_today</span>
+              <span className="text-[#f2c35b] font-medium">{formatLiveDate(currentDateTime)}</span>
+              <span className="text-white/30">•</span>
+              <span className="material-symbols-outlined text-[18px] text-emerald-400">schedule</span>
+              <span className="text-white font-mono">{formatLiveTime(currentDateTime)}</span>
+            </div>
+
+            {/* Manual Table Refresh Button */}
+            <button
+              onClick={() => refreshTables()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#32281e] border border-[#f2c35b]/30 text-[#f2c35b] hover:bg-[#3d3328] hover:border-[#f2c35b] transition-all text-xs font-semibold shadow-md active:scale-95 cursor-pointer"
+              title="Refresh table status from Supabase database"
+            >
+              <span className="material-symbols-outlined text-[16px]">refresh</span>
+              <span className="hidden sm:inline">Refresh Tables</span>
+            </button>
+
+
+
             {/* Theme Toggle Pill */}
             <div className={`flex items-center rounded-full p-1 border ${isDark ? 'bg-[#32281e] border-white/5' : 'bg-stone-200 border-stone-300'}`}>
               <button
@@ -581,98 +1104,123 @@ export default function Dashboard() {
               </div>
             </section>
 
-            {/* Tables Grid */}
-            <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-24 md:pb-0">
-              {filteredTables.map(t => {
-                const subtotal = calcSubtotal(t.orders);
+            {/* Tables Grid / Empty & Exception State */}
+            {filteredTables.length === 0 ? (
+              <div className={`p-8 text-center rounded-2xl border my-4 ${
+                isDark ? 'bg-[#231a11] border-amber-500/30 text-[#f1dfd0]' : 'bg-stone-50 border-amber-300 text-stone-900'
+              }`}>
+                <span className="material-symbols-outlined text-5xl text-[#f2c35b] mb-3">table_restaurant</span>
+                <h3 className="text-xl font-bold font-headline mb-2 text-[#f2c35b]">No Tables Found</h3>
+                <div className="bg-[#1a1209] p-4 rounded-xl border border-red-500/30 max-w-xl mx-auto mb-4 text-left">
+                  <p className="text-xs font-bold text-red-400 mb-1 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">warning</span>
+                    <span>Supabase Database Exception:</span>
+                  </p>
+                  <p className="text-xs text-stone-300 font-mono m-0 break-words">
+                    {tableFetchError || 'No restaurant_tables records found in Supabase project.'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => refreshTables()}
+                  className="px-5 py-2.5 bg-[#f2c35b] text-[#261a00] rounded-xl font-bold text-xs hover:bg-[#d4a843] transition-colors shadow-md cursor-pointer flex items-center gap-2 mx-auto"
+                >
+                  <span className="material-symbols-outlined text-base">refresh</span>
+                  <span>Retry Supabase Query</span>
+                </button>
+              </div>
+            ) : (
+              <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-24 md:pb-0">
+                {filteredTables.map(t => {
+                  const subtotal = calcSubtotal(t.orders);
 
-                return (
+                  return (
 
-                  <div
-                    key={t.id}
-                    onClick={() => setSelectedTable(t)}
-                    className={`rounded-2xl p-5 flex flex-col justify-between h-52 transition-all cursor-pointer relative overflow-hidden group shadow-md ${
-                      t.status === 'preparing'
-                        ? 'bg-[#231a11] border-2 border-[#f2c35b]/40 animate-pulse-amber hover:border-[#f2c35b]'
-                        : t.status === 'ready'
-                        ? 'glass-panel border-l-4 border-l-[#f2c35b] hover:bg-white/5'
-                        : t.status === 'occupied'
-                        ? 'bg-[#c3aa95]/10 border border-transparent hover:border-[#e0c5af]/30'
-                        : 'bg-transparent border border-[#f2c35b]/30 hover:bg-white/5'
-                    }`}
-                  >
-                    {/* Top Row */}
-                    <div className="flex justify-between items-start relative z-10">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-headline text-lg font-bold ${
-                          t.status === 'ready'
-                            ? 'bg-[#f2c35b]/20 text-[#f2c35b] text-glow'
-                            : isDark ? 'bg-[#271e14] text-[#f1dfd0]' : 'bg-stone-100 text-stone-800'
-                        }`}>
-                          T{t.number}
-                        </div>
-                        <div>
-                          <p className={`text-xs font-bold uppercase ${
-                            t.status === 'preparing' ? 'text-[#f2c35b]' : t.status === 'ready' ? 'text-[#f2c35b]' : 'text-[#d2c5b1]'
+                    <div
+                      key={t.id}
+                      onClick={() => setSelectedTable(t)}
+                      className={`rounded-2xl p-5 flex flex-col justify-between h-52 transition-all cursor-pointer relative overflow-hidden group shadow-md ${
+                        t.status === 'preparing'
+                          ? 'bg-[#231a11] border-2 border-[#f2c35b]/40 animate-pulse-amber hover:border-[#f2c35b]'
+                          : t.status === 'ready'
+                          ? 'glass-panel border-l-4 border-l-[#f2c35b] hover:bg-white/5'
+                          : t.status === 'occupied'
+                          ? 'bg-[#c3aa95]/10 border border-transparent hover:border-[#e0c5af]/30'
+                          : 'bg-transparent border border-[#f2c35b]/30 hover:bg-white/5'
+                      }`}
+                    >
+                      {/* Top Row */}
+                      <div className="flex justify-between items-start relative z-10">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-headline text-lg font-bold ${
+                            t.status === 'ready'
+                              ? 'bg-[#f2c35b]/20 text-[#f2c35b] text-glow'
+                              : isDark ? 'bg-[#271e14] text-[#f1dfd0]' : 'bg-stone-100 text-stone-800'
                           }`}>
-                            {t.status}
-                          </p>
-                          <p className="text-sm text-[#f1dfd0]">{t.capacity} Guests</p>
+                            T{t.number}
+                          </div>
+                          <div>
+                            <p className={`text-xs font-bold uppercase ${
+                              t.status === 'preparing' ? 'text-[#f2c35b]' : t.status === 'ready' ? 'text-[#f2c35b]' : 'text-[#d2c5b1]'
+                            }`}>
+                              {t.status}
+                            </p>
+                          </div>
                         </div>
+
+                        {/* Icon */}
+                        {t.status === 'order_sent' && <span className="material-symbols-outlined text-amber-400">send</span>}
+                        {t.status === 'preparing' && <span className="material-symbols-outlined text-[#f2c35b] animate-spin">soup_kitchen</span>}
+                        {t.status === 'occupied' && <span className="material-symbols-outlined text-[#e0c5af]">restaurant</span>}
+                        {t.status === 'ready' && (
+                          <div className="bg-[#f2c35b] text-[#402d00] rounded-full w-8 h-8 flex items-center justify-center shadow-[0_0_10px_rgba(242,195,91,0.5)]">
+                            <span className="material-symbols-outlined text-[18px]">notifications_active</span>
+                          </div>
+                        )}
+                        {t.status === 'available' && <span className="material-symbols-outlined text-[#d2c5b1] opacity-50">check_circle</span>}
                       </div>
 
-                      {/* Icon */}
-                      {t.status === 'preparing' && <span className="material-symbols-outlined text-[#f2c35b]">soup_kitchen</span>}
-                      {t.status === 'occupied' && <span className="material-symbols-outlined text-[#e0c5af]">restaurant</span>}
-                      {t.status === 'ready' && (
-                        <div className="bg-[#f2c35b] text-[#402d00] rounded-full w-8 h-8 flex items-center justify-center shadow-[0_0_10px_rgba(242,195,91,0.5)]">
-                          <span className="material-symbols-outlined text-[18px]">notifications_active</span>
+
+                      {/* Bottom Row */}
+                      {t.status === 'ready' ? (
+                        <div className="relative z-10 flex justify-between items-end">
+                          <div>
+                            <p className="text-xs text-[#d2c5b1] mb-0.5">Current Bill</p>
+                            <p className="font-headline text-xl font-bold text-[#f2c35b]">₹{subtotal.toLocaleString()}</p>
+                          </div>
+                        </div>
+                      ) : (t.status === 'occupied' || t.status === 'preparing') ? (
+                        <div className="relative z-10 flex justify-between items-end">
+                          <div>
+                            <p className="text-xs text-[#d2c5b1] mb-0.5">Active Order</p>
+                            <p className="text-sm font-bold text-[#f1dfd0]">{t.orders.length} Item{t.orders.length !== 1 ? 's' : ''}</p>
+                          </div>
+                        </div>
+                      ) :
+   t.status === 'available' ? (
+                        <div className="flex justify-center mt-auto">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setSelectedTable(t); }}
+                            className="text-xs font-bold text-[#f2c35b] bg-transparent border border-[#f2c35b]/50 px-4 py-2 rounded-lg hover:bg-[#f2c35b]/10 transition-colors"
+                          >
+                            Seat Guests
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between items-end mt-auto text-xs text-[#d2c5b1]/70">
+                          <span>Pending Clear</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleStatusChange(t.id, 'available'); }}
+                            className="underline hover:text-[#f2c35b]"
+                          >
+                            Mark Clean
+                          </button>
                         </div>
                       )}
-                      {t.status === 'available' && <span className="material-symbols-outlined text-[#d2c5b1] opacity-50">check_circle</span>}
                     </div>
-
-
-                    {/* Bottom Row */}
-                    {t.status === 'ready' ? (
-                      <div className="relative z-10 flex justify-between items-end">
-                        <div>
-                          <p className="text-xs text-[#d2c5b1] mb-0.5">Current Bill</p>
-                          <p className="font-headline text-xl font-bold text-[#f2c35b]">₹{subtotal.toLocaleString()}</p>
-                        </div>
-                      </div>
-                    ) : (t.status === 'occupied' || t.status === 'preparing') ? (
-                      <div className="relative z-10 flex justify-between items-end">
-                        <div>
-                          <p className="text-xs text-[#d2c5b1] mb-0.5">Active Order</p>
-                          <p className="text-sm font-bold text-[#f1dfd0]">{t.orders.length} Item{t.orders.length !== 1 ? 's' : ''}</p>
-                        </div>
-                      </div>
-                    ) :
- t.status === 'available' ? (
-                      <div className="flex justify-center mt-auto">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setSelectedTable(t); }}
-                          className="text-xs font-bold text-[#f2c35b] bg-transparent border border-[#f2c35b]/50 px-4 py-2 rounded-lg hover:bg-[#f2c35b]/10 transition-colors"
-                        >
-                          Seat Guests
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex justify-between items-end mt-auto text-xs text-[#d2c5b1]/70">
-                        <span>Pending Clear</span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleStatusChange(t.id, 'available'); }}
-                          className="underline hover:text-[#f2c35b]"
-                        >
-                          Mark Clean
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </section>
+                  );
+                })}
+              </section>
+            )}
           </>
         )}
 
@@ -849,10 +1397,6 @@ export default function Dashboard() {
               <div className="flex items-center gap-6">
                 <h2 className="font-headline text-2xl font-bold text-[#f2c35b]">Table {selectedTable.number} Order</h2>
                 <div className="flex gap-3">
-                  <div className="flex items-center gap-2 bg-[#3d3328]/50 px-3.5 py-1.5 rounded-full border border-white/5 text-xs text-[#d2c5b1]">
-                    <span className="material-symbols-outlined text-[#eec058] text-[18px]">group</span>
-                    <span>{selectedTable.capacity} Guests</span>
-                  </div>
                 </div>
               </div>
 
@@ -877,8 +1421,8 @@ export default function Dashboard() {
                 <div className="flex-1 overflow-y-auto receipt-scroll p-8 font-receipt text-sm">
                   <div className="space-y-6">
                     {selectedTable.orders.map(item => (
-                      <div key={item.id} className={`flex justify-between items-start group rounded-lg p-2 transition-all ${
-                        item.isNew ? 'bg-[#f2c35b]/10 border border-[#f2c35b]/20' : ''
+                      <div key={item.id} className={`flex justify-between items-center group rounded-xl p-3 transition-all ${
+                        item.isNew ? 'bg-[#f2c35b]/10 border border-[#f2c35b]/20' : 'bg-white/5 border border-white/5'
                       }`}>
                         <div className="flex-1">
                           <div className="flex justify-between text-[#f1dfd0] mb-1 font-semibold">
@@ -891,6 +1435,13 @@ export default function Dashboard() {
                             {item.isNew && <span className="bg-[#f2c35b]/20 text-[#f2c35b] px-2 py-0.5 rounded-full text-[10px] font-bold">New</span>}
                           </div>
                         </div>
+                        <button
+                          onClick={() => handleRemoveOrderItem(selectedTable.id, item.id)}
+                          title="Remove item"
+                          className="text-stone-400 hover:text-red-400 p-2 rounded-lg hover:bg-red-500/10 transition-colors ml-3 cursor-pointer shrink-0"
+                        >
+                          <span className="material-symbols-outlined text-[20px]">delete</span>
+                        </button>
                       </div>
                     ))}
 
@@ -905,22 +1456,55 @@ export default function Dashboard() {
               {/* RIGHT COLUMN: Actions & Billing */}
               <div className="w-full md:w-1/2 flex flex-col bg-[#231a11]">
 
-                {/* Quick Actions (Take Order & Add Item) */}
-                <div className="p-6 md:p-8 border-b border-white/5 grid grid-cols-2 gap-4">
-                  <button
-                    onClick={() => handleOpenTakeOrder(selectedTable, 'take_order')}
-                    className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-[24px]">receipt_long</span>
-                    <span className="text-xs font-bold">Take Order</span>
-                  </button>
-                  <button
-                    onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
-                    className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-[24px]">add_circle</span>
-                    <span className="text-xs font-bold">Add Item</span>
-                  </button>
+                {/* Quick Actions (Take Order / Send to Kitchen / Finish Order & Add Item) */}
+                <div className="p-6 md:p-8 border-b border-white/5 flex flex-col gap-4">
+                  {selectedTable.orders.some(o => o.isNew) ? (
+                    /* Draft items added before kitchen send */
+                    <button
+                      onClick={() => handleSendToKitchen(selectedTable)}
+                      className="w-full bg-[#f2c35b] hover:bg-[#ffe2ab] text-[#261a00] transition-all rounded-xl p-4 flex items-center justify-center gap-2 font-bold cursor-pointer shadow-lg"
+                    >
+                      <span className="material-symbols-outlined text-[24px]">send</span>
+                      <span className="text-sm font-bold">Send to Kitchen</span>
+                    </button>
+                  ) : (selectedTable.status === 'preparing' || selectedTable.status === 'ready' || (selectedTable.orders.length > 0 && !selectedTable.orders.some(o => o.isNew))) ? (
+                    /* AFTER sending to kitchen: REMOVE "Take Order", ONLY show "Add Item" (and "Finish Order" if ready) */
+                    selectedTable.status === 'ready' ? (
+                      <div className="grid grid-cols-2 gap-4">
+                        <button
+                          onClick={() => handleFinishOrder(selectedTable)}
+                          className="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 text-emerald-400 font-bold cursor-pointer shadow-md"
+                        >
+                          <span className="material-symbols-outlined text-[24px]">task_alt</span>
+                          <span className="text-xs font-bold">Finish Order</span>
+                        </button>
+                        <button
+                          onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                          className="bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[24px]">add_circle</span>
+                          <span className="text-xs font-bold">Add Item</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                        className="w-full bg-[#3d3328]/30 hover:bg-[#3d3328] border border-white/10 hover:border-[#f2c35b]/50 transition-all rounded-xl p-4 flex items-center justify-center gap-2 group text-[#d2c5b1] hover:text-[#f2c35b] cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[24px]">add_circle</span>
+                        <span className="text-sm font-bold">Add Item</span>
+                      </button>
+                    )
+                  ) : (
+                    /* FIRST TIME before sending to kitchen: ONLY show "Take Order", REMOVE "Add Item" */
+                    <button
+                      onClick={() => handleOpenTakeOrder(selectedTable, 'take_order')}
+                      className="w-full bg-[#f2c35b] hover:bg-[#ffe2ab] text-[#261a00] transition-all rounded-xl p-4 flex items-center justify-center gap-2 font-bold cursor-pointer shadow-lg"
+                    >
+                      <span className="material-symbols-outlined text-[24px]">receipt_long</span>
+                      <span className="text-sm font-bold">Take Order</span>
+                    </button>
+                  )}
                 </div>
 
 
@@ -952,30 +1536,96 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      {/* Footer Action Buttons (Print Receipt shown only when Chef marks order ready) */}
+                      {/* Footer Action Buttons */}
                       <div className="flex gap-3">
-                        {selectedTable.status === 'ready' ? (
-                          <button className="w-full py-4 px-4 rounded-xl font-bold text-sm bg-[#f2c35b] text-[#402d00] hover:bg-[#ffe2ab] transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(242,195,91,0.3)]">
-                            <span className="material-symbols-outlined text-[22px]">print</span>
-                            <span>Print Receipt (Order Ready)</span>
-                          </button>
-                        ) : selectedTable.status === 'preparing' ? (
-                          <button
-                            disabled
-                            className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#f2c35b]/10 border border-[#f2c35b]/40 flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
-                          >
-                            <span className="material-symbols-outlined text-[18px] animate-spin">soup_kitchen</span>
-                            <span>Order Sent to Kitchen (Preparing)</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleSendToKitchen(selectedTable)}
-                            className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#261a00] bg-[#f2c35b] hover:bg-[#ffe2ab] transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">send</span>
-                            <span>Send to Kitchen</span>
-                          </button>
-                        )}
+                        {(() => {
+                          const hasUnsentItems = selectedTable.orders.some(o => o.sentToKitchen === false);
+
+                          if (hasUnsentItems) {
+                            return (
+                              <button
+                                onClick={() => handleSendToKitchen(selectedTable)}
+                                className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#261a00] bg-[#f2c35b] hover:bg-[#ffe2ab] transition-colors flex items-center justify-center gap-2 shadow-lg cursor-pointer animate-pulse"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">send</span>
+                                <span>Send New Items to Kitchen</span>
+                              </button>
+                            );
+                          }
+
+                          if (selectedTable.status === 'ready') {
+                            return (
+                              <div className="w-full flex gap-3">
+                                <button
+                                  onClick={() => handleFinishOrder(selectedTable)}
+                                  className="flex-1 py-4 px-4 rounded-xl font-bold text-sm bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[22px]">payments</span>
+                                  <span>Finish Order & Generate Bill (Checkout)</span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                                  className="py-4 px-5 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#3d3328]/50 border border-[#f2c35b]/40 hover:bg-[#3d3328] transition-colors flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                                  <span>Add Item</span>
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          if (selectedTable.status === 'order_sent') {
+                            return (
+                              <div className="w-full flex gap-3">
+                                <button
+                                  disabled
+                                  className="flex-1 py-4 px-4 rounded-xl font-bold text-xs text-amber-400 bg-amber-500/10 border border-amber-500/40 flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">send</span>
+                                  <span>Order Sent to Kitchen</span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                                  className="py-4 px-5 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#3d3328]/50 border border-[#f2c35b]/40 hover:bg-[#3d3328] transition-colors flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                                  <span>Add Item</span>
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          if (selectedTable.status === 'preparing') {
+                            return (
+                              <div className="w-full flex gap-3">
+                                <button
+                                  disabled
+                                  className="flex-1 py-4 px-4 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#f2c35b]/10 border border-[#f2c35b]/40 flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
+                                >
+                                  <span className="material-symbols-outlined text-[18px] animate-spin">soup_kitchen</span>
+                                  <span>Chef Preparing Order (Preparing)</span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                                  className="py-4 px-5 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#3d3328]/50 border border-[#f2c35b]/40 hover:bg-[#3d3328] transition-colors flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                                  <span>Add Item</span>
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <button
+                              onClick={() => handleOpenTakeOrder(selectedTable, 'add_item')}
+                              className="w-full py-4 px-4 rounded-xl font-bold text-xs text-[#f2c35b] bg-[#3d3328]/50 border border-[#f2c35b]/40 hover:bg-[#3d3328] transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                              <span>Add Item</span>
+                            </button>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -1072,7 +1722,7 @@ export default function Dashboard() {
                   >
                     {tables.map(t => (
                       <option key={t.id} value={t.id}>
-                        Table #{t.number} ({t.capacity} Seats - {t.status})
+                        Table #{t.number} ({t.status})
                       </option>
                     ))}
                   </select>
@@ -1219,25 +1869,151 @@ export default function Dashboard() {
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <button
                   onClick={() => setShowTakeOrderModal(false)}
-                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl border border-white/10 text-xs font-bold text-[#d2c5b1] hover:text-white transition-colors cursor-pointer"
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl border border-white/10 text-xs font-bold text-[#d2c5b1] hover:text-white transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleConfirmOrderItems}
                   disabled={Object.values(itemQuantities).reduce((a, b) => a + b, 0) === 0}
-                  className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#f2c35b] to-[#d4a843] text-[#261a00] font-bold text-xs hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-[#3d3328] text-[#f2c35b] border border-[#f2c35b]/40 font-bold text-xs hover:bg-[#4a3f32] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-[18px]">
-                    {modalMode === 'add_item' ? 'add_circle' : 'check_circle'}
-                  </span>
-                  <span>
-                    {modalMode === 'add_item'
-                      ? `Append Items to Table #${takeOrderTable?.number || 1}`
-                      : `Confirm & Create Order for Table #${takeOrderTable?.number || 1}`}
-                  </span>
+                  <span className="material-symbols-outlined text-[18px]">save</span>
+                  <span>Save Draft</span>
+                </button>
+                <button
+                  onClick={handleConfirmAndSendDirectToKitchen}
+                  disabled={Object.values(itemQuantities).reduce((a, b) => a + b, 0) === 0}
+                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#f2c35b] to-[#d4a843] text-[#261a00] font-bold text-xs hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[18px]">send</span>
+                  <span>Send to Kitchen 🚀</span>
                 </button>
               </div>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Payment Checkout Modal ───────────────────────────────────────────── */}
+      {paymentModalTable && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#1f1710] border border-[#f2c35b]/30 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl animate-fade-in flex flex-col max-h-[90vh]">
+            <header className="p-5 border-b border-white/10 bg-[#2d2217] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[24px]">payments</span>
+                </div>
+                <div>
+                  <h3 className="font-headline font-bold text-lg text-white">
+                    Checkout Table #{paymentModalTable.number}
+                  </h3>
+                  <p className="text-xs text-[#d2c5b1]">
+                    {paymentModalTable.ticketNo || `#${8900 + paymentModalTable.number}`} • Select Payment Method & Complete Order
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPaymentModalTable(null)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-[#d2c5b1] hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </header>
+
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* Order Receipt Summary */}
+              <div className="bg-[#2d2217]/60 rounded-xl p-4 border border-white/5">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#f2c35b] mb-3">Order Receipt Breakdown</h4>
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                  {paymentModalTable.orders.map(o => (
+                    <div key={o.id} className="flex justify-between items-center text-xs">
+                      <span className="text-white font-medium">{o.itemName} x {o.qty}</span>
+                      <span className="text-[#f2c35b] font-mono">₹{(o.price * o.qty).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 text-xs">
+                  {(() => {
+                    const subtotal = calcSubtotal(paymentModalTable.orders);
+                    const gst = subtotal * 0.05;
+                    const serviceCharge = subtotal * 0.10;
+                    const grandTotal = Math.round(subtotal + gst + serviceCharge);
+                    return (
+                      <>
+                        <div className="flex justify-between text-[#d2c5b1]">
+                          <span>Subtotal</span>
+                          <span>₹{subtotal.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-[#d2c5b1]">
+                          <span>GST (5%)</span>
+                          <span>₹{gst.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-[#d2c5b1]">
+                          <span>Service Charge (10%)</span>
+                          <span>₹{serviceCharge.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-base font-bold text-[#f2c35b] pt-2 border-t border-white/10">
+                          <span>Grand Total</span>
+                          <span>₹{grandTotal.toLocaleString()}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Payment Method Selector */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#d2c5b1] mb-2">
+                  Select Payment Method
+                </label>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { id: 'Card', label: 'Card / Debit', icon: 'credit_card' },
+                    { id: 'Cash', label: 'Cash', icon: 'payments' },
+                    { id: 'UPI', label: 'UPI / QR', icon: 'qr_code_scanner' },
+                  ].map(m => {
+                    const isSelected = selectedPaymentMethod === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setSelectedPaymentMethod(m.id as any)}
+                        className={`p-3.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-[#f2c35b]/20 border-[#f2c35b] text-[#f2c35b] shadow-[0_0_15px_rgba(242,195,91,0.2)]'
+                            : 'bg-[#2d2217]/50 border-white/10 text-[#d2c5b1] hover:border-white/20 hover:text-white'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[24px]">{m.icon}</span>
+                        <span className="text-xs font-bold">{m.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <footer className="p-4 sm:p-5 border-t border-white/10 bg-[#2d2217] flex items-center justify-end gap-3 shrink-0">
+              <button
+                onClick={() => setPaymentModalTable(null)}
+                disabled={isProcessingPayment}
+                className="px-4 py-2.5 rounded-xl border border-white/10 text-xs font-bold text-[#d2c5b1] hover:text-white transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmPaymentAndCompleteOrder}
+                disabled={isProcessingPayment}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 text-slate-950 font-bold text-xs hover:brightness-110 disabled:opacity-50 transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                <span>
+                  {isProcessingPayment ? 'Storing Order & Processing...' : `Confirm ${selectedPaymentMethod} Payment`}
+                </span>
+              </button>
             </footer>
           </div>
         </div>

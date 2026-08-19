@@ -2,6 +2,12 @@
 -- SUPABASE DATABASE SCHEMA: SAFE NON-DESTRUCTIVE CREATION
 -- ═══════════════════════════════════════════════════════════════════════════════
 
+-- AUTH SCHEMA STUB FOR LOCAL POSTGRESQL / PGADMIN COMPATIBILITY
+CREATE SCHEMA IF NOT EXISTS auth;
+CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
+SELECT 'authenticated'::text;
+$$ LANGUAGE sql STABLE;
+
 -- 1. CREATE SEQUENCE (IF NOT EXISTS)
 CREATE SEQUENCE IF NOT EXISTS public.item_id_seq START WITH 1 INCREMENT BY 1;
 
@@ -88,5 +94,51 @@ INSERT INTO public.item_quantities (date, item_id, item_name, prepared_quantity,
     (CURRENT_DATE, '008', 'Mango Lassi', 50, 12),
     (CURRENT_DATE, '009', 'Gulab Jamun', 80, 50)
 ON CONFLICT (date, item_id) DO NOTHING;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 4. RESTAURANT TABLES TABLE (SAFE CREATION: STORE ID, STORE NAME, TABLE NUMBER, STATUS)
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS public.restaurant_tables (
+    id BIGSERIAL PRIMARY KEY,
+    store_id VARCHAR(50) NOT NULL DEFAULT 'STORE-001',
+    store_name VARCHAR(255) NOT NULL DEFAULT 'Spice Garden Main',
+    table_number INT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'available',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT unique_store_table UNIQUE (store_id, table_number)
+);
+
+-- INDEXES FOR PERFORMANCE
+CREATE INDEX IF NOT EXISTS idx_restaurant_tables_store_id ON public.restaurant_tables(store_id);
+CREATE INDEX IF NOT EXISTS idx_restaurant_tables_table_number ON public.restaurant_tables(table_number);
+CREATE INDEX IF NOT EXISTS idx_restaurant_tables_status ON public.restaurant_tables(status);
+
+-- ROW LEVEL SECURITY (RLS) POLICIES
+ALTER TABLE public.restaurant_tables ENABLE ROW LEVEL SECURITY;
+
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public read access on restaurant_tables') THEN
+        CREATE POLICY "Allow public read access on restaurant_tables" ON public.restaurant_tables FOR SELECT USING (true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow full access for authenticated on restaurant_tables') THEN
+        CREATE POLICY "Allow full access for authenticated on restaurant_tables" ON public.restaurant_tables FOR ALL USING (auth.role() = 'authenticated');
+    END IF;
+END $$;
+
+-- SAMPLE SEED DATA FOR RESTAURANT TABLES (SAFE INSERT)
+INSERT INTO public.restaurant_tables (store_id, store_name, table_number, status) VALUES
+    ('STORE-001', 'Spice Garden Main', 1, 'occupied'),
+    ('STORE-001', 'Spice Garden Main', 2, 'available'),
+    ('STORE-001', 'Spice Garden Main', 3, 'available'),
+    ('STORE-001', 'Spice Garden Main', 4, 'preparing'),
+    ('STORE-001', 'Spice Garden Main', 5, 'available'),
+    ('STORE-001', 'Spice Garden Main', 6, 'ready'),
+    ('STORE-001', 'Spice Garden Main', 7, 'preparing'),
+    ('STORE-001', 'Spice Garden Main', 8, 'available')
+ON CONFLICT (store_id, table_number) DO NOTHING;
+
 
 
