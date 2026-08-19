@@ -84,15 +84,18 @@ export function saveStoredOrders(orders: KDSOrder[]) {
 // Helper to convert Supabase table row to KDSOrder
 export function mapTableToKDSOrder(t: any): KDSOrder | null {
   const statusStr = (t.status || 'available').toString().trim().toLowerCase();
-  if (statusStr === 'available') return null;
+  // Do NOT load available or occupied tables into Chef KDS (only order_sent, preparing, ready, completed)
+  if (statusStr === 'available' || statusStr === 'occupied') return null;
 
   let kdsStatus: OrderStatus = 'pending';
   if (statusStr === 'preparing') {
     kdsStatus = 'preparing';
   } else if (statusStr === 'ready' || statusStr === 'prepared' || statusStr === 'closed') {
     kdsStatus = 'completed';
-  } else if (statusStr === 'order_sent' || statusStr === 'occupied') {
+  } else if (statusStr === 'order_sent') {
     kdsStatus = 'pending';
+  } else {
+    return null;
   }
 
   const tableNum = Number(t.table_number || t.id);
@@ -111,12 +114,9 @@ export function mapTableToKDSOrder(t: any): KDSOrder | null {
     }
   }
 
-  // Fallback: If itemsArray from Supabase is empty, check stored orders for this table
-  if (itemsArray.length === 0) {
-    const existingStored = getStoredOrders().find(o => Number(o.tableNumber) === tableNum);
-    if (existingStored && existingStored.items && existingStored.items.length > 0) {
-      itemsArray = existingStored.items;
-    }
+  // If there are no items in this order, do NOT render an empty card in Chef KDS!
+  if (!itemsArray || itemsArray.length === 0) {
+    return null;
   }
 
   return {
@@ -144,19 +144,27 @@ export async function fetchSupabaseOrders(): Promise<KDSOrder[]> {
       return getStoredOrders();
     }
 
+    // Purge cached stored orders for tables that are now available or occupied
+    const activeTableNumbers = new Set(
+      data
+        .filter(t => {
+          const s = (t.status || '').toString().trim().toLowerCase();
+          return s === 'order_sent' || s === 'preparing' || s === 'ready' || s === 'prepared';
+        })
+        .map(t => Number(t.table_number || t.id))
+    );
+
+    const stored = getStoredOrders().filter(o => activeTableNumbers.has(Number(o.tableNumber)));
+
     const liveOrders: KDSOrder[] = [];
     data.forEach(t => {
-      const statusStr = (t.status || 'available').toString().trim().toLowerCase();
-      // If table is marked available in Supabase, do NOT load its order into Chef KDS!
-      if (statusStr === 'available') return;
-
       const mapped = mapTableToKDSOrder(t);
       if (mapped && mapped.items && mapped.items.length > 0) {
         liveOrders.push(mapped);
       }
     });
 
-    const clean = dedupeOrdersByTable(liveOrders);
+    const clean = dedupeOrdersByTable([...liveOrders, ...stored]);
     saveStoredOrders(clean);
     return clean;
   } catch (err) {
